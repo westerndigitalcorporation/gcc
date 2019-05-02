@@ -2323,7 +2323,7 @@ scan_omp_for (gomp_for *stmt, omp_context *outer_ctx)
 	  while (tree probe = *prev_ptr)
 	    {
 	      tree *next_ptr = &OMP_CLAUSE_CHAIN (probe);
-	      
+
 	      if (OMP_CLAUSE_CODE (probe) == OMP_CLAUSE_REDUCTION)
 		*prev_ptr = *next_ptr;
 	      else
@@ -6410,7 +6410,7 @@ lower_oacc_head_mark (location_t loc, tree ddvar, tree clauses,
     tag |= OLF_INDEPENDENT;
 
   if (tag & OLF_TILE)
-    /* Tiling could use all 3 levels.  */ 
+    /* Tiling could use all 3 levels.  */
     levels = 3;
   else
     {
@@ -6438,7 +6438,7 @@ lower_oacc_head_mark (location_t loc, tree ddvar, tree clauses,
 }
 
 /* Emit an OpenACC lopp head or tail marker to SEQ.  LEVEL is the
-   partitioning level of the enclosed region.  */ 
+   partitioning level of the enclosed region.  */
 
 static void
 lower_oacc_loop_marker (location_t loc, tree ddvar, bool head,

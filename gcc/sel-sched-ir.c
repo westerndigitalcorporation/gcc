@@ -4896,7 +4896,7 @@ bb_ends_ebb_p (basic_block bb)
   if (e)
     {
       gcc_assert (e->dest == next_bb);
-      
+
       return false;
     }
 

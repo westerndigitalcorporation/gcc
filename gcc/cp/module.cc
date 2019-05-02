@@ -28,7 +28,7 @@ along with GCC; see the file COPYING3.  If not see
 
    The merged modules proposal, p1103r1, allows me to drop support for
    two different schemes.
-   
+
    Each namespace-scope decl has a MODULE_OWNER.  This is MODULE_NONE
    for entities declared in the Global Module Fragment.  In the
    purview of the current module, it is MODULE_PURVIEW.  For any
@@ -431,7 +431,7 @@ public:
   bytes ()
     :parent (), bit_val (0), bit_pos (0)
   {}
-  ~bytes () 
+  ~bytes ()
   {
   }
 
@@ -592,7 +592,7 @@ class bytes_out : public bytes {
 
 public:
   allocator *memory;	/* Obtainer of memory.  */
-  
+
 public:
   bytes_out (allocator *memory)
     : parent (), memory (memory)
@@ -623,7 +623,7 @@ public:
     if (unsigned pad = pos & (boundary - 1))
       write (boundary - pad);
   }
-  
+
 public:
   char *write (unsigned count, bool exact = false)
   {
@@ -1163,7 +1163,7 @@ protected:
     uint32_t entry;	/* 0 */
     uint32_t phoff;	/* 0 */
     uint32_t shoff;	/* Section Header Offset in file */
-    uint32_t flags; 
+    uint32_t flags;
     uint16_t ehsize;	/* ELROND Header SIZE -- sizeof (header) */
     uint16_t phentsize; /* 0 */
     uint16_t phnum;	/* 0 */
@@ -1630,7 +1630,7 @@ elf_in::read (data *data, unsigned pos, unsigned length)
     }
 #endif
   grow (*data, length);
-#if MAPPED_READING  
+#if MAPPED_READING
   data->buffer = hdr.buffer + pos;
 #else
   if (::read (fd, data->buffer, data->size) != length)
@@ -2223,14 +2223,14 @@ public:
     EK_UNNAMED,
     EK_SPECIALIZATION, /* Any kind of specialization.  */
     EK_NAMESPACE,
-    EK_EXPLICIT_HWM,  
+    EK_EXPLICIT_HWM,
     EK_BINDING = EK_EXPLICIT_HWM, /* Implicitly encoded.  */
     EK_BITS = 3, /* Only need to encode below EK_EXPLICIT_HWM.  */
   };
 
 private:
   /* Placement of bit fields in discriminator.  */
-  enum disc_bits 
+  enum disc_bits
   {
     DB_ZERO_BIT, /* Set to disambiguate identifier from flags  */
     DB_KIND_BIT, /* Kind of the entity.  */
@@ -2300,7 +2300,7 @@ private:
     gcc_checking_assert (!is_binding ());
     return bool ((discriminator >> I) & 1);
   }
-  
+
 public:
   bool is_internal () const
   {
@@ -2430,7 +2430,7 @@ public:
     }
 
   public:
-    bool is_mergeable_dep () const 
+    bool is_mergeable_dep () const
     {
       return mergeable_dep;
     }
@@ -2465,7 +2465,7 @@ public:
       : result (&result), stack (), index (0)
     {
     }
-    ~tarjan () 
+    ~tarjan ()
     {
       gcc_assert (!stack.length ());
     }
@@ -2490,7 +2490,7 @@ const char *
 depset::entity_kind_name () const
 {
   /* Same order as entity_kind.  */
-  static const char *const names[] = 
+  static const char *const names[] =
     {"decl", "using", "unnamed", "specialization", "namespace", "binding"};
   return names[get_entity_kind ()];
 }
@@ -2572,7 +2572,7 @@ public:
   };
 
 public:
-  class hash : public hash_table<traits> 
+  class hash : public hash_table<traits>
   {
     typedef traits::compare_type key_t;
     typedef hash_table<traits> parent;
@@ -2690,7 +2690,7 @@ public:
 public:
   /* Serialize various definitions. */
   bool read_definition (tree decl);
-  
+
 private:
   bool is_matching_decl (tree existing, tree node);
   int is_skippable_defn (tree node, bool have_defn);
@@ -4106,7 +4106,7 @@ maybe_add_bmi_prefix (const char *to, bool force = false)
       memcpy (&bmi_path[pos], to, len + 1);
       to = bmi_path;
     }
-  
+
   return to;
 }
 
@@ -5537,7 +5537,7 @@ trees_out::core_vals (tree t)
 	}
       WT (((lang_tree_node *)t)->tpi.decl);
       break;
-      
+
     case TS_CP_PTRMEM:
       WT (((lang_tree_node *)t)->ptrmem.member);
       break;
@@ -5546,7 +5546,7 @@ trees_out::core_vals (tree t)
       WT (((lang_tree_node *)t)->overload.function);
       WT (t->common.chain);
       break;
-      
+
     case TS_CP_MODULE_VECTOR:
       gcc_unreachable (); /* Should never see.  */
       break;
@@ -6532,7 +6532,7 @@ trees_out::tree_ctx (tree ctx, bool need_contents, tree inner_decl)
 	tree_namespace (ctx, walk, inner_decl);
       else
 	by_value = tree_decl (ctx, walk, need_contents);
-  
+
       if (by_value)
 	tree_value (ctx, walk);
     }
@@ -7746,7 +7746,7 @@ trees_out::tree_mergeable (depset *dep)
 	    }
 	}
       break;
-	  
+
     default:
       // FIXME: More cases
       gcc_unreachable ();
@@ -7915,7 +7915,7 @@ trees_in::finish_type (tree type)
 	      if (type_memfn_rqual (type) != type_memfn_rqual (probe))
 		continue;
 	    }
-	  
+
 	  dump (dumper::TREE)
 	    && dump ("Type %p already found as %p variant of %p",
 		     (void *)type, (void *)probe, (void *)main);
@@ -8187,7 +8187,7 @@ trees_in::read_function_def (tree decl)
     {
       // FIXME: Check matching defn
     }
-  
+
   return true;
 }
 
@@ -8365,7 +8365,7 @@ trees_out::write_class_def (tree defn)
   chained_decls (TYPE_FIELDS (type));
   tree_node (TYPE_VFIELD (type));
   write_binfos (type);
-  
+
   if (TYPE_LANG_SPECIFIC (type))
     {
       tree_vec (CLASSTYPE_MEMBER_VEC (type));
@@ -8942,7 +8942,7 @@ depset::hash::add_dependency (tree decl, entity_kind ek, bool is_import)
 	    }
 	}
     }
- 
+
   return dep;
 }
 
@@ -9182,7 +9182,7 @@ binding_cmp (const void *a_, const void *b_)
     }
   else
     a_export = DECL_MODULE_EXPORT_P (a_ent);
-  
+
   bool b_using = b->get_entity_kind () == depset::EK_USING;
   bool b_export;
   if (b_using)
@@ -9674,7 +9674,7 @@ module_mapper::module_mapper (location_t loc, const char *option)
   const char *dflt = "|cxx-mapper";
   pex = NULL;
 
-  
+
   /* We set name as soon as we know what kind of mapper this is.  */
   if (!option)
     option = dflt;
@@ -9732,7 +9732,7 @@ module_mapper::module_mapper (location_t loc, const char *option)
 		}
 	    }
 	  if (!arg_no++)
-	    len = ptr - (writable + 1);	  
+	    len = ptr - (writable + 1);
 	  if (!*ptr)
 	    break;
 	  *ptr = 0;
@@ -9886,7 +9886,7 @@ module_mapper::module_mapper (location_t loc, const char *option)
 	      name = writable;
 	    }
 	}
-      
+
       if (un.sun_family != AF_UNSPEC)
 	{
 	  fd = socket (un.sun_family, SOCK_STREAM, 0);
@@ -10020,7 +10020,7 @@ module_mapper::module_mapper (location_t loc, const char *option)
 		set_bmi_repo (file);
 		continue;
 	      }
-	    
+
 	    starting = false;
 	    file = maybe_strip_bmi_prefix (file);
 	    module_state *state = get_module (mod, NULL);
@@ -10473,7 +10473,7 @@ module_mapper::export_done (const module_state *state)
 {
   bool ok = true;
   module_mapper *mapper = get (state->from_loc);
-  
+
   if (mapper->is_server ())
     {
       dump () && dump ("Completed mapper");
@@ -11164,7 +11164,7 @@ module_state::write_cluster (elf_out *to, depset *scc[], unsigned size,
 	      dump () && dump ("Voldemort:%u %N", b->cluster - 1, decl);
 	    sec.u (b->cluster);
 	    sec.u (b->has_defn ());
-	    if (b->has_defn ()) 
+	    if (b->has_defn ())
 	      sec.write_definition (decl);
 	  }
 	  break;
@@ -12026,7 +12026,7 @@ module_state::prepare_locations ()
 	  location_t start_loc = MAP_START_LOCATION (omap);
 	  unsigned to = start_loc + span.ordinary_delta;
 	  location_t end_loc = MAP_START_LOCATION (omap + 1);
-	  
+
 	  dump () && dump ("Ordinary:%u [%u,%u)=%u->%u", ix, start_loc,
 			   end_loc, end_loc - start_loc, to);
 
@@ -12242,7 +12242,7 @@ module_state::write_locations (elf_out *to, unsigned max_rager,
 		gcc_checking_assert (!mmap->n_tokens);
 		continue;
 	      }
-	    
+
 	    sec.u (offset);
 	    sec.u (mmap->n_tokens);
 	    sec.cpp_node (mmap->macro);
@@ -12319,7 +12319,7 @@ module_state::read_locations ()
 
   {
     /* Read the ordinary maps.  */
-    unsigned num_ordinary = sec.u (); 
+    unsigned num_ordinary = sec.u ();
     unsigned max_rager = sec.u ();
     unsigned low_bits = sec.u ();
     location_t zero = sec.u ();
@@ -12693,11 +12693,11 @@ public:
     }
 
   public:
-    bool get_undef () const 
+    bool get_undef () const
     {
       return (bits >> L_UNDEF) & 1;
     }
-    bool get_def () const 
+    bool get_def () const
     {
       return (bits >> L_DEF) & 1;
     }
@@ -13010,7 +13010,7 @@ module_state::write_macros (elf_out *to, cpp_reader *reader, unsigned *crc_p)
   dump.outdent ();
   return count;
 }
- 
+
 bool
 module_state::read_macros ()
 {
@@ -13102,7 +13102,7 @@ module_state::undef_macro (cpp_reader *, location_t loc, cpp_hashnode *node)
   if (!node->deferred)
     /* The macro is not imported, so our undef is irrelevant.  */
     return;
-  
+
   unsigned n = dump.push (NULL);
 
   macro_import::slot &slot = (*macro_imports)[node->deferred - 1].exported ();
@@ -13535,7 +13535,7 @@ module_state::read_config (cpp_reader *reader, module_state_config &config)
 	  /* Non-experimental or majors differ, decline.  */
 	  error_at (loc, "file is version %s, this is version %s",
 		    their_string, my_string);
-	
+
 	  cfg.set_overrun ();
 	  goto done;
 	}
@@ -13674,7 +13674,7 @@ module_state::read_config (cpp_reader *reader, module_state_config &config)
 	goto done;
       }
   }
-  
+
   /* Check global trees.  */
   {
     unsigned their_fixed_length = cfg.u ();
@@ -14310,7 +14310,7 @@ get_module_owner (tree decl, bool inst_owner_p)
     }
 
   decl = STRIP_TEMPLATE (decl);
-  
+
   /* An enumeration is controlled by its enum-decl.  Its
      enumerations may not have that as DECL_CONTEXT.  */
   if (TREE_CODE (decl) == CONST_DECL
@@ -14659,7 +14659,7 @@ module_state::lazy_load (tree ns, tree id, mc_slot *mslot, bool outermost)
 
   bool ok = check_read (diags, ns, id);
   gcc_assert (ok || !outermost);
- 
+
   dump.pop (n);
 
   return ok;
