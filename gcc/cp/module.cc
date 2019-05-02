@@ -14015,7 +14015,8 @@ module_state::read (int fd, int e, cpp_reader *reader)
 
   /* Look away.  Look away now.  */
   extern cpp_options *cpp_opts;
-  if (config.num_macros && !cpp_opts->preprocessed)
+  if (config.num_macros &&
+      (!cpp_opts->preprocessed || cpp_opts->directives_only))
     if (!read_macros ())
       return NULL;
 
