@@ -66,13 +66,15 @@ MODULE_VERSION := $(shell date -r $(srcdir)/cp '+%y%m%d-%H%M' 2>/dev/null || \
 	date '+%y%m%d-0000' 2>/dev/null || echo 0)
 ifneq ($(REVISION_s),$(REVISION_s:%]\""=%))
 # REVISION_s ended with ]\""
-MODULE_REVISION := $(shell svn status -v $(srcdir)/../ChangeLog.modules \
-	2>/dev/null | sed 's/^.......... *[^ ]* *\([^ ]*\).*$$/:svn-\1/')
-ifeq ($(MODULE_REVISION),)
-MODULE_REVISION := $(shell git rev-list --max-count=1 HEAD -- \
-	$(srcdir)/../ChangeLog.modules 2>/dev/null | \
-	sed 's/[^ ]* *\([^ ]*\).*$$/:git-\1/')
-endif
+#MODULE_REVISION := $(shell svn status -v $(srcdir)/../ChangeLog.modules \
+#	2>/dev/null | sed 's/^.......... *[^ ]* *\([^ ]*\).*$$/:svn-\1/')
+#ifeq ($(MODULE_REVISION),)
+#MODULE_REVISION := $(shell git rev-list --max-count=1 HEAD -- \
+#	$(srcdir)/../ChangeLog.modules 2>/dev/null | \
+#	sed 's/[^ ]* *\([^ ]*\).*$$/:git-\1/')
+#endif
+MODULE_REVISION = $(shell git -C $(srcdir)/.. log ChangeLog.modules | \
+        sed -ne '/ *git-svn-id: /{s/ *git-svn-id: .*@\([^ ]*\).*/:svn-\1/p;q}')
 version.o : $(srcdir)/cp/module.cc
 # Wedge the MODULE_VERSION & MODULE_REVISION into REVISION_s so that
 # it turns up in -v invocations.  Remember, Make thinks of REVISION_s
