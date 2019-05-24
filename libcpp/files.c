@@ -526,8 +526,6 @@ _cpp_find_file (cpp_reader *pfile, _cpp_file *retry, const char *fname,
   if (start_dir == NULL)
     cpp_error_at (pfile, CPP_DL_ICE, loc, "NULL directory in find_file");
 
-  //fprintf (stderr, "start dir for %s is %p\n", fname, start_dir);
-
   hash_slot = (struct cpp_file_hash_entry **)
     htab_find_slot_with_hash (pfile->file_hash, fname,
 			      htab_hash_string (fname), INSERT);
@@ -575,8 +573,6 @@ _cpp_find_file (cpp_reader *pfile, _cpp_file *retry, const char *fname,
 	  else if (dir == pfile->quote_include ||
 		   dir == pfile->bracket_include)
 	    {
-	      //fprintf (stderr, "removing %s %p from %p\n", fname, retry, dir);
-
 	      /* Unfortunately there is no way to return the entry to the
 		 pool. We could, however, save pointers to the freed entries
 		 and reuse them below when potentially adding things back.  */
@@ -718,8 +714,6 @@ _cpp_find_file (cpp_reader *pfile, _cpp_file *retry, const char *fname,
       && pfile->bracket_include != start_dir
       && found_in_cache != pfile->bracket_include)
     {
-      // fprintf (stderr, "adding %s %p to %p (<>)\n", fname, file, pfile->bracket_include);
-
       entry = new_file_hash_entry (pfile);
       entry->next = *hash_slot;
       entry->start_dir = pfile->bracket_include;
@@ -731,8 +725,6 @@ _cpp_find_file (cpp_reader *pfile, _cpp_file *retry, const char *fname,
       && pfile->quote_include != start_dir
       && found_in_cache != pfile->quote_include)
     {
-      // fprintf (stderr, "adding %s %p to %p (\"\")\n", fname, file, pfile->quote_include);
-
       entry = new_file_hash_entry (pfile);
       entry->next = *hash_slot;
       entry->start_dir = pfile->quote_include;
