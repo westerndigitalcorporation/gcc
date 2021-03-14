@@ -13387,7 +13387,13 @@ maybe-install-gmp:
 @if gmp
 maybe-install-gmp: install-gmp
 
-install-gmp:
+install-gmp: installdirs
+	@: $(MAKE); $(unstage)
+	@r=`${PWD_COMMAND}`; export r; \
+	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
+	$(HOST_EXPORTS) \
+	(cd $(HOST_SUBDIR)/gmp && \
+	  $(MAKE) $(FLAGS_TO_PASS) AM_CFLAGS="-DNO_ASM" install)
 
 @endif gmp
 
@@ -13396,7 +13402,13 @@ maybe-install-strip-gmp:
 @if gmp
 maybe-install-strip-gmp: install-strip-gmp
 
-install-strip-gmp:
+install-strip-gmp: installdirs
+	@: $(MAKE); $(unstage)
+	@r=`${PWD_COMMAND}`; export r; \
+	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
+	$(HOST_EXPORTS) \
+	(cd $(HOST_SUBDIR)/gmp && \
+	  $(MAKE) $(FLAGS_TO_PASS) AM_CFLAGS="-DNO_ASM" install-strip)
 
 @endif gmp
 

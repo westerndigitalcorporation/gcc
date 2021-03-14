@@ -51,7 +51,8 @@ host_modules= { module= gmp; lib_path=.libs; bootstrap=true;
 		// Work around in-tree gmp configure bug with missing flex.
 		extra_configure_flags='--disable-shared LEX="touch lex.yy.c"';
 		extra_make_flags='AM_CFLAGS="-DNO_ASM"';
-		no_install= true;
+		//[OS] gdb 11.x needs gmp 
+		//no_install= true;
 		// none-*-* disables asm optimizations, bootstrap-testing
 		// the compiler more thoroughly.
 	        host="none-${host_vendor}-${host_os}";
