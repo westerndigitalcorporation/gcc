@@ -37,9 +37,15 @@
 
 #include <bits/c++config.h>
 
-#if _GLIBCXX_HAVE_FENV_H
-# include <fenv.h>
-#endif
+//#if _GLIBCXX_HAVE_FENV_H
+//# include <fenv.h>
+//#endif
+// [OS]: issue 100017: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=100017
+// Need to ensure this finds the C library's <stdlib.h> not a libstdc++
+// wrapper that might already be installed later in the include search path.
+#define _GLIBCXX_INCLUDE_NEXT_C_HEADERS 
+#include_next <fenv.h>
+#undef _GLIBCXX_INCLUDE_NEXT_C_HEADERS 
 
 #ifdef _GLIBCXX_USE_C99_FENV_TR1
 
