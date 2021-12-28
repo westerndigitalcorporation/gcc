@@ -293,7 +293,7 @@ static std::list<int>
 get_bb_preds(basic_block bb ){
   std::list<int>bb_preds_list;
   std::list<int>::iterator visited_bb_it;
-  
+
   if(bb==NULL)
     return bb_preds_list;
 
@@ -963,50 +963,7 @@ node->valid_value=false;
 
 return node;
 }
-static void 
-build_nested_insns_to_value(rtx_insn * currinsn, insns_to_value * nextnode,std::stack<insns_to_value*> stack){
-//the nested insns is expr
-  rtx nextInsnExpr;
-  int num_of_operands;
-  insns_to_value *newNode,*curcrnode;
-  std::stack<insns_to_value*> newInsnsStack;
-  newInsnsStack.push(nextnode);
- 
-  while(!newInsnsStack.empty()){ 
-   curcrnode=newInsnsStack.top();
-   newInsnsStack.pop();
-  // num_of_operands=GET_RTX_LENGTH(curcrnode->code);
 
-    for (int index=0;(index<num_of_operands)&&(num_of_operands>1);index++){ /* if num_of_operands is 1  thats mean it REG or CONST_INT... */
-      nextInsnExpr=NULL;//XEXP(curcrnode,index);
-     // newNode=build_insn_to_value_node(currinsn, nextInsnExpr,curcrnode, D_BTM_EXPR);
-      //newInsnsStack.push(newNode);
-    }
-
-  }
-
-}
-static insns_to_value*
-nested_build_insns_to_value_node_and(rtx_insn *curr_insn,insns_to_value *father,std::stack<insns_to_value*> &stack)
-{
-insns_to_value *node,*currnode,*nextnode;
-rtx_def * nestedInsn;
-rtx * opernad;
-int num_of_operands,index;
-node= build_insn_to_value_node(curr_insn,NULL,0,NULL,D_BTM_INSN);
-stack.push(node);
-/*while there nested code creat node and push it to stack
-put the father prev pushed node  */
-currnode=node;
-nestedInsn=single_set(curr_insn);
-
-//nextnode=build_insn_to_value_node(curr_insn,NULL,currnode,D_BTM_EXPR);//nestedInsn TYPE IS rtx_def* <<<<<<<<<error
-//nextnode->code=GET_CODE(nestedInsn);
-
-//build_nested_insns_to_value(curr_insn,nextnode,stack);
- 
-return node;
-}
 static int 
 getTypeSizeOnBits(machine_mode mode)
 {
@@ -1186,7 +1143,6 @@ findLastInsanModifiedDestReg(insns_to_value * node)
 static insns_to_value *
 pushInsnToStack(rtx_insn * currentInsn,insns_to_value * father,rtx curr_expr,int opNum,int type, std::stack<insns_to_value*> &stack){
   insns_to_value *node;
-  // build_insn_to_value_node(rtx_insn *curr_insn,rtx curr_expr,int opernadNum ,insns_to_value *father, int type)
 
   node=build_insn_to_value_node(currentInsn,curr_expr,opNum,father,type);
   stack.push(node);
