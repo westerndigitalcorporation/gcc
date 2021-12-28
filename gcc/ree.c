@@ -232,8 +232,33 @@ along with GCC; see the file COPYING3.  If not see
 #include "cfgrtl.h"
 #include "expr.h"
 #include "tree-pass.h"
+#include <list>
+#include <map>
 
+#include <algorithm>
+#include <stack>
+#include <pthread.h>
+
+#pragma GCC poison malloc
+
+#define D_BTM_INSN 0
+#define D_BTM_EXPR 1
+#define RTX_INSN_NULL (rtx_insn*)0
 /* This structure represents a candidate for elimination.  */
+
+struct insns_to_value
+{
+  /* The instruction */
+  int type;
+  insns_to_value * father;
+  rtx_insn *current_insn;
+  rtx current_expr;
+  std::list<int> operands_value;
+  rtx_code code;
+  int value;
+  int opernadNum;
+  bool valid_value;
+};
 
 struct ext_cand
 {
@@ -250,49 +275,98 @@ struct ext_cand
   rtx_insn *insn;
 };
 
+std::list<int> g_list_visited_insns;    
+std::list<int>::iterator g_list_visited_insns_it;
+bool g_valid_data=true;
+ 
+std::list<basic_block>::iterator bb_it;
+
+auto_vec<basic_block > bb_preds_vec;
+auto_vec<rtx_insn *> insn_defs;
 
 static int max_insn_uid;
+
+static bool 
+bb_preds_vec_is_containing(basic_block cbb)
+{
+  bool f;
+  if(bb_preds_vec.is_empty ())
+    return false;
+
+  basic_block bb=bb_preds_vec.pop();
+
+  if(bb == cbb)
+  {
+    bb_preds_vec.safe_push(bb);
+    return true;
+  }
+  f=bb_preds_vec_is_containing(cbb); 
+  bb_preds_vec.safe_push(bb);
+  return  f;
+} 
+
+static void
+get_bb_preds_vec(basic_block bb ){
+  bb_preds_vec.truncate (0);
+  while(bb->prev_bb){
+    if(bb->prev_bb != NULL)
+      bb_preds_vec.safe_push (bb->prev_bb);
+    bb=bb->prev_bb;
+  }
+ }
+
+static std::list<basic_block> 
+get_bb_preds(basic_block bb ){
+  std::list<basic_block>bb_preds_list;
+ 
+  while(bb->prev_bb){
+    if(bb->prev_bb != NULL)
+    bb_preds_list.push_back(bb->prev_bb);
+    bb=bb->prev_bb;
+  }
+  return bb_preds_list;
+}
 
 /* Update or remove REG_EQUAL or REG_EQUIV notes for INSN.  */
 
 static bool
 update_reg_equal_equiv_notes (rtx_insn *insn, machine_mode new_mode,
-			      machine_mode old_mode, enum rtx_code code)
+            machine_mode old_mode, enum rtx_code code)
 {
   rtx *loc = &REG_NOTES (insn);
   while (*loc)
     {
       enum reg_note kind = REG_NOTE_KIND (*loc);
       if (kind == REG_EQUAL || kind == REG_EQUIV)
-	{
-	  rtx orig_src = XEXP (*loc, 0);
-	  /* Update equivalency constants.  Recall that RTL constants are
-	     sign-extended.  */
-	  if (GET_CODE (orig_src) == CONST_INT
-	      && HWI_COMPUTABLE_MODE_P (new_mode))
-	    {
-	      if (INTVAL (orig_src) >= 0 || code == SIGN_EXTEND)
-		/* Nothing needed.  */;
-	      else
-		{
-		  /* Zero-extend the negative constant by masking out the
-		     bits outside the source mode.  */
-		  rtx new_const_int
-		    = gen_int_mode (INTVAL (orig_src)
-				    & GET_MODE_MASK (old_mode),
-				    new_mode);
-		  if (!validate_change (insn, &XEXP (*loc, 0),
-					new_const_int, true))
-		    return false;
-		}
-	      loc = &XEXP (*loc, 1);
-	    }
-	  /* Drop all other notes, they assume a wrong mode.  */
-	  else if (!validate_change (insn, loc, XEXP (*loc, 1), true))
-	    return false;
-	}
+  {
+    rtx orig_src = XEXP (*loc, 0);
+    /* Update equivalency constants.  Recall that RTL constants are
+       sign-extended.  */
+    if (GET_CODE (orig_src) == CONST_INT
+        && HWI_COMPUTABLE_MODE_P (new_mode))
+      {
+        if (INTVAL (orig_src) >= 0 || code == SIGN_EXTEND)
+    /* Nothing needed.  */;
+        else
+    {
+      /* Zero-extend the negative constant by masking out the
+         bits outside the source mode.  */
+      rtx new_const_int
+        = gen_int_mode (INTVAL (orig_src)
+            & GET_MODE_MASK (old_mode),
+            new_mode);
+      if (!validate_change (insn, &XEXP (*loc, 0),
+          new_const_int, true))
+        return false;
+    }
+        loc = &XEXP (*loc, 1);
+      }
+    /* Drop all other notes, they assume a wrong mode.  */
+    else if (!validate_change (insn, loc, XEXP (*loc, 1), true))
+      return false;
+  }
       else
-	loc = &XEXP (*loc, 1);
+  loc = &XEXP (*loc, 1);
     }
   return true;
 }
@@ -317,6 +391,7 @@ update_reg_equal_equiv_notes (rtx_insn *insn, machine_mode new_mode,
 static bool
 combine_set_extension (ext_cand *cand, rtx_insn *curr_insn, rtx *orig_set)
 {
+
   rtx orig_src = SET_SRC (*orig_set);
   machine_mode orig_mode = GET_MODE (SET_DEST (*orig_set));
   rtx new_set;
@@ -340,16 +415,16 @@ combine_set_extension (ext_cand *cand, rtx_insn *curr_insn, rtx *orig_set)
       && HWI_COMPUTABLE_MODE_P (cand->mode))
     {
       if (INTVAL (orig_src) >= 0 || cand->code == SIGN_EXTEND)
-	new_set = gen_rtx_SET (new_reg, orig_src);
+  new_set = gen_rtx_SET (new_reg, orig_src);
       else
-	{
-	  /* Zero-extend the negative constant by masking out the bits outside
-	     the source mode.  */
-	  rtx new_const_int
-	    = gen_int_mode (INTVAL (orig_src) & GET_MODE_MASK (orig_mode),
-			    GET_MODE (new_reg));
-	  new_set = gen_rtx_SET (new_reg, new_const_int);
-	}
+  {
+    /* Zero-extend the negative constant by masking out the bits outside
+       the source mode.  */
+    rtx new_const_int
+      = gen_int_mode (INTVAL (orig_src) & GET_MODE_MASK (orig_mode),
+          GET_MODE (new_reg));
+    new_set = gen_rtx_SET (new_reg, new_const_int);
+  }
     }
   else if (GET_MODE (orig_src) == VOIDmode)
     {
@@ -360,7 +435,7 @@ combine_set_extension (ext_cand *cand, rtx_insn *curr_insn, rtx *orig_set)
     {
       /* Here is a sequence of two extensions.  Try to merge them.  */
       rtx temp_extension
-	= gen_rtx_fmt_e (cand->code, cand->mode, XEXP (orig_src, 0));
+  = gen_rtx_fmt_e (cand->code, cand->mode, XEXP (orig_src, 0));
       rtx simplified_temp_extension = simplify_rtx (temp_extension);
       if (simplified_temp_extension)
         temp_extension = simplified_temp_extension;
@@ -376,7 +451,7 @@ combine_set_extension (ext_cand *cand, rtx_insn *curr_insn, rtx *orig_set)
     {
       /* This is the normal case.  */
       rtx temp_extension
-	= gen_rtx_fmt_e (cand->code, cand->mode, orig_src);
+  = gen_rtx_fmt_e (cand->code, cand->mode, orig_src);
       rtx simplified_temp_extension = simplify_rtx (temp_extension);
       if (simplified_temp_extension)
         temp_extension = simplified_temp_extension;
@@ -387,13 +462,13 @@ combine_set_extension (ext_cand *cand, rtx_insn *curr_insn, rtx *orig_set)
      validate_change will not try to commit the change.  */
   if (validate_change (curr_insn, orig_set, new_set, true)
       && update_reg_equal_equiv_notes (curr_insn, cand->mode, orig_mode,
-				       cand->code))
+               cand->code))
     {
       if (dump_file)
         {
           fprintf (dump_file,
-		   "Tentatively merged extension with definition %s:\n",
-		   (copy_needed) ? "(copy needed)" : "");
+       "Tentatively merged extension with definition %s:\n",
+       (copy_needed) ? "(copy needed)" : "");
           print_rtl_single (dump_file, curr_insn);
         }
       return true;
@@ -440,12 +515,12 @@ transform_ifelse (ext_cand *cand, rtx_insn *def_insn)
 
   if (validate_change (def_insn, &PATTERN (def_insn), new_set, true)
       && update_reg_equal_equiv_notes (def_insn, cand->mode, GET_MODE (dstreg),
-				       cand->code))
+               cand->code))
     {
       if (dump_file)
         {
           fprintf (dump_file,
-		   "Mode of conditional move instruction extended:\n");
+       "Mode of conditional move instruction extended:\n");
           print_rtl_single (dump_file, def_insn);
         }
       return true;
@@ -458,7 +533,6 @@ transform_ifelse (ext_cand *cand, rtx_insn *def_insn)
    desired for REG used in INSN.  Return the definition list or NULL if a
    definition is missing.  If DEST is non-NULL, additionally push the INSN
    of the definitions onto DEST.  */
-
 static struct df_link *
 get_defs (rtx_insn *insn, rtx reg, vec<rtx_insn *> *dest)
 {
@@ -470,7 +544,7 @@ get_defs (rtx_insn *insn, rtx reg, vec<rtx_insn *> *dest)
       if (GET_CODE (DF_REF_REG (use)) == SUBREG)
         return NULL;
       if (REGNO (DF_REF_REG (use)) == REGNO (reg))
-	break;
+  break;
     }
 
   gcc_assert (use != NULL);
@@ -485,13 +559,13 @@ get_defs (rtx_insn *insn, rtx reg, vec<rtx_insn *> *dest)
       if (DF_REF_INSN_INFO (ref_link->ref) == NULL)
         return NULL;
       /* As global regs are assumed to be defined at each function call
-	 dataflow can report a call_insn as being a definition of REG.
-	 But we can't do anything with that in this pass so proceed only
-	 if the instruction really sets REG in a way that can be deduced
-	 from the RTL structure.  */
+   dataflow can report a call_insn as being a definition of REG.
+   But we can't do anything with that in this pass so proceed only
+   if the instruction really sets REG in a way that can be deduced
+   from the RTL structure.  */
       if (global_regs[REGNO (reg)]
-	  && !set_of (reg, DF_REF_INSN (ref_link->ref)))
-	return NULL;
+    && !set_of (reg, DF_REF_INSN (ref_link->ref)))
+  return NULL;
     }
 
   if (dest)
@@ -524,7 +598,7 @@ get_uses (rtx_insn *insn, rtx reg)
       if (ref_link->ref == NULL)
         return NULL;
       if (DF_REF_CLASS (ref_link->ref) != DF_REF_REGULAR)
-	return NULL;
+  return NULL;
     }
 
   return ref_chain;
@@ -610,9 +684,9 @@ public:
 
 static bool
 make_defs_and_copies_lists (rtx_insn *extend_insn, const_rtx set_pat,
-			    ext_state *state)
+          ext_state *state)
 {
-  rtx src_reg = XEXP (SET_SRC (set_pat), 0);
+  rtx src_reg = XEXP (SET_SRC (set_pat), 0);//iq: accses Operand 0 
   bool *is_insn_visited;
   bool ret = true;
 
@@ -633,24 +707,25 @@ make_defs_and_copies_lists (rtx_insn *extend_insn, const_rtx set_pat,
       gcc_assert (INSN_UID (def_insn) < max_insn_uid);
 
       if (is_insn_visited[INSN_UID (def_insn)])
-	continue;
+  continue;
       is_insn_visited[INSN_UID (def_insn)] = true;
 
       if (is_cond_copy_insn (def_insn, &reg1, &reg2))
-	{
-	  /* Push it onto the copy list first.  */
-	  state->copies_list.safe_push (def_insn);
+  {
+    /* Push it onto the copy list first.  */
+    state->copies_list.safe_push (def_insn);
 
-	  /* Now perform the transitive closure.  */
-	  if (!get_defs (def_insn, reg1, &state->work_list)
-	      || !get_defs (def_insn, reg2, &state->work_list))
-	    {
-	      ret = false;
-	      break;
-	    }
+    /* Now perform the transitive closure.  */
+    if (!get_defs (def_insn, reg1, &state->work_list)
+        || !get_defs (def_insn, reg2, &state->work_list))
+      {
+        ret = false;//true and call ebraheem phi func
+
+        break;
+      }
         }
       else
-	state->defs_list.safe_push (def_insn);
+  state->defs_list.safe_push (def_insn);
     }
 
   XDELETEVEC (is_insn_visited);
@@ -658,10 +733,11 @@ make_defs_and_copies_lists (rtx_insn *extend_insn, const_rtx set_pat,
   return ret;
 }
 
-/* If DEF_INSN has single SET expression, possibly buried inside
-   a PARALLEL, return the address of the SET expression, else
-   return NULL.  This is similar to single_set, except that
-   single_set allows multiple SETs when all but one is dead.  */
+/* If DEF_INSN has single SET expression with a register
+   destination, possibly buried inside a PARALLEL, return
+   the address of the SET expression, else return NULL.
+   This is similar to single_set, except that single_set
+   allows multiple SETs when all but one is dead.  */
 static rtx *
 get_sub_rtx (rtx_insn *def_insn)
 {
@@ -675,6 +751,8 @@ get_sub_rtx (rtx_insn *def_insn)
           rtx s_expr = XVECEXP (PATTERN (def_insn), 0, i);
           if (GET_CODE (s_expr) != SET)
             continue;
+    if (!REG_P (SET_DEST (s_expr)))
+      continue;
 
           if (sub_rtx == NULL)
             sub_rtx = &XVECEXP (PATTERN (def_insn), 0, i);
@@ -686,14 +764,12 @@ get_sub_rtx (rtx_insn *def_insn)
         }
     }
   else if (code == SET)
-    sub_rtx = &PATTERN (def_insn);
-  else
     {
-      /* It is not a PARALLEL or a SET, what could it be ? */
-      return NULL;
+  rtx s_expr = PATTERN (def_insn);
+  if (REG_P (SET_DEST (s_expr)))
+    sub_rtx = &PATTERN (def_insn);
     }
 
-  gcc_assert (sub_rtx != NULL);
   return sub_rtx;
 }
 
@@ -712,30 +788,65 @@ merge_def_and_ext (ext_cand *cand, rtx_insn *def_insn, ext_state *state)
   if (sub_rtx == NULL)
     return false;
 
-  if (REG_P (SET_DEST (*sub_rtx))
-      && (GET_MODE (SET_DEST (*sub_rtx)) == ext_src_mode
-	  || ((state->modified[INSN_UID (def_insn)].kind
-	       == (cand->code == ZERO_EXTEND
-		   ? EXT_MODIFIED_ZEXT : EXT_MODIFIED_SEXT))
-	      && state->modified[INSN_UID (def_insn)].mode
-		 == ext_src_mode)))
+  if (GET_MODE (SET_DEST (*sub_rtx)) == ext_src_mode
+    || ((state->modified[INSN_UID (def_insn)].kind
+         == (cand->code == ZERO_EXTEND
+       ? EXT_MODIFIED_ZEXT : EXT_MODIFIED_SEXT))
+        && state->modified[INSN_UID (def_insn)].mode
+     == ext_src_mode))
     {
       if (GET_MODE_UNIT_SIZE (GET_MODE (SET_DEST (*sub_rtx)))
-	  >= GET_MODE_UNIT_SIZE (cand->mode))
-	return true;
+    >= GET_MODE_UNIT_SIZE (cand->mode))
+  return true;
       /* If def_insn is already scheduled to be deleted, don't attempt
-	 to modify it.  */
+   to modify it.  */
       if (state->modified[INSN_UID (def_insn)].deleted)
-	return false;
+  return false;
       if (combine_set_extension (cand, def_insn, sub_rtx))
-	{
-	  if (state->modified[INSN_UID (def_insn)].kind == EXT_MODIFIED_NONE)
-	    state->modified[INSN_UID (def_insn)].mode = ext_src_mode;
-	  return true;
-	}
+  {
+    if (state->modified[INSN_UID (def_insn)].kind == EXT_MODIFIED_NONE)
+      state->modified[INSN_UID (def_insn)].mode = ext_src_mode;
+    return true;
+  }
     }
 
   return false;
+}
+/* get index of first src operand for RTX_EXTRA class  */
+static int
+firstOperandSrcForRTX_EXTRA(insns_to_value *node){
+
+  switch(node->code){
+    case SET:
+      return 1;
+    case SUBREG:
+      return 0;
+    default:
+      return 1;
+
+
+  }
+}
+
+/* get index of first src operand*/
+static int
+firstOperandSrc(insns_to_value * node){
+      //if((GET_RTX_CLASS (node->code) == RTX_CONST_OBJ)){
+  switch(GET_RTX_CLASS (node->code)){
+    case RTX_COMM_ARITH:
+      return 1;
+    case     RTX_UNARY:
+    case RTX_BIN_ARITH:
+    case   RTX_AUTOINC:
+    return 0;
+    case RTX_EXTRA:
+    return firstOperandSrcForRTX_EXTRA(node);
+    default:
+    return 1;
+
+  }
+
+
 }
 
 /* Given SRC, which should be one or more extensions of a REG, strip
@@ -749,6 +860,588 @@ get_extended_src_reg (rtx src)
   gcc_assert (REG_P (src));
   return src;
 }
+
+/* return operands number for given expression */
+static int 
+getNumberOfOperands(rtx expr){
+  rtx_code code=GET_CODE(expr);
+return GET_RTX_LENGTH(code);
+}
+
+/* return true if insn part of loop else return false */
+static bool 
+isPartOfLoop(rtx_insn *insn)
+{
+ basic_block bb=BLOCK_FOR_INSN(insn);
+ if(bb->loop_father==NULL)
+  return false;
+return true;
+}
+static rtx 
+getExpr(insns_to_value * node){
+
+  if(node->type == D_BTM_INSN)
+    return single_set(node->current_insn);
+  return node->current_expr;
+}
+
+/*
+return true if the insn marked as visited
+return false if the insn did not marked as visited
+*/
+static bool
+InsansIsVisited(rtx_insn *curr_insn)
+{
+  int currentInsnId;
+  currentInsnId=INSN_UID(curr_insn);
+  if (g_list_visited_insns.empty())
+     return false;
+  g_list_visited_insns_it = std::find(g_list_visited_insns.begin(), g_list_visited_insns.end(), currentInsnId);
+  if (g_list_visited_insns_it == g_list_visited_insns.end())
+    return false;
+  return true;
+
+}
+
+/* return unique ID to operand */
+static int
+calcOpernadId(insns_to_value * node){
+int exprId,insnId,exprShift=10,tempInId;
+//rtx_insn * temp=node->current_insn;
+if(node->current_insn!=RTX_INSN_NULL)
+  insnId=INSN_UID(node->current_insn);//unique <<<<<<<<<<<<<<<<<<<<<<<<<bug
+tempInId=insnId;
+
+while(tempInId > 9){
+  exprShift=exprShift*10;
+  tempInId=tempInId/10;
+}
+
+exprId=(exprShift * node->opernadNum) + insnId; // exprId= num|unique == unique
+
+return exprId;
+}
+/*
+return true if the insn marked as visited
+return false if the insn did not marked as visited
+*/
+static bool
+OperandIsVisited(insns_to_value * node)
+{
+  int currentOpId;
+  currentOpId=calcOpernadId(node);
+  if (g_list_visited_insns.empty())
+     return false;
+  g_list_visited_insns_it = std::find(g_list_visited_insns.begin(), g_list_visited_insns.end(), currentOpId);
+  if (g_list_visited_insns_it == g_list_visited_insns.end())
+    return false;
+  return true;
+
+}
+/* mark operand expr as visited*/
+static void
+markOperandAsVisited(insns_to_value * node){
+
+int exprId=calcOpernadId(node);
+
+if(!OperandIsVisited(node))
+  g_list_visited_insns.push_back(exprId);
+}
+
+/* mark insn as visited */
+static void
+markInsnsAsVisited(rtx_insn *curr_insn)
+{
+  int currentInsnId=INSN_UID(curr_insn);
+
+  if(!InsansIsVisited(curr_insn))
+    g_list_visited_insns.push_back(currentInsnId);
+}
+
+static insns_to_value*
+build_insn_to_value_node(rtx_insn *curr_insn,rtx curr_expr,int opernadNum ,insns_to_value *father, int type)
+{
+ insns_to_value *node = new  insns_to_value;//(insns_to_value *) malloc(sizeof(insns_to_value));
+rtx expr;
+node->type=type;
+node->father=father;
+node->current_expr=curr_expr;
+node->current_insn=curr_insn;
+expr=getExpr(node);
+node->current_expr=expr;
+node->code=GET_CODE(expr);
+node->opernadNum=opernadNum;
+node->valid_value=false;
+
+return node;
+}
+static void 
+build_nested_insns_to_value(rtx_insn * currinsn, insns_to_value * nextnode,std::stack<insns_to_value*> stack){
+//the nested insns is expr
+  rtx nextInsnExpr;
+  int num_of_operands;
+  insns_to_value *newNode,*curcrnode;
+  std::stack<insns_to_value*> newInsnsStack;
+  newInsnsStack.push(nextnode);
+ 
+  while(!newInsnsStack.empty()){ 
+   curcrnode=newInsnsStack.top();
+   newInsnsStack.pop();
+  // num_of_operands=GET_RTX_LENGTH(curcrnode->code);
+
+    for (int index=0;(index<num_of_operands)&&(num_of_operands>1);index++){ /* if num_of_operands is 1  thats mean it REG or CONST_INT... */
+      nextInsnExpr=NULL;//XEXP(curcrnode,index);
+     // newNode=build_insn_to_value_node(currinsn, nextInsnExpr,curcrnode, D_BTM_EXPR);
+      //newInsnsStack.push(newNode);
+    }
+
+  }
+
+}
+static insns_to_value*
+nested_build_insns_to_value_node_and(rtx_insn *curr_insn,insns_to_value *father,std::stack<insns_to_value*> &stack)
+{
+insns_to_value *node,*currnode,*nextnode;
+rtx_def * nestedInsn;
+rtx * opernad;
+int num_of_operands,index;
+node= build_insn_to_value_node(curr_insn,NULL,0,NULL,D_BTM_INSN);
+stack.push(node);
+/*while there nested code creat node and push it to stack
+put the father prev pushed node  */
+currnode=node;
+nestedInsn=single_set(curr_insn);
+
+//nextnode=build_insn_to_value_node(curr_insn,NULL,currnode,D_BTM_EXPR);//nestedInsn TYPE IS rtx_def* <<<<<<<<<error
+//nextnode->code=GET_CODE(nestedInsn);
+
+//build_nested_insns_to_value(curr_insn,nextnode,stack);
+ 
+return node;
+}
+static int 
+getTypeSizeOnBits(machine_mode mode)
+{
+  /* SEE https://gcc.gnu.org/onlinedocs/gccint/Machine-Modes.html*/
+  /* we supports only integer instructions up to 64'bit */
+ switch (mode)
+    {
+      /* bit */
+      case BImode:
+        return 1;
+      /* if it partial Quarter integer or Quarter integer return 8 (1bytes)*/
+    //  case PQImode:
+      case QImode:
+        return 8;
+      /* if it partial half integer or half integer return 16 (2bytes)*/
+      //case PHImode:
+      case HImode:
+        return 16;
+      //case PSImode: /*Partial Single Integer , we take worst case , maybe the value pointer*/ //31
+      case SImode:
+        return 32;
+      /*Double Intege / partial Double Intege */
+      //case PDImode:
+      case DImode:
+        return 64;
+
+    default:
+      return 64;
+    }
+}
+static int 
+calcMaxValue(insns_to_value* node)
+{
+  rtx expr;
+  if(node->code == REG){
+    //GET_MODE(XEXP(single_set(curr_insn),0))
+    expr = getExpr(node);
+  if(expr !=NULL_RTX){
+ // machine_mode mode=GET_MODE(SET_DEST(XEXP(expr,0)));//<<<<<<<<<<<<<<<<<bug
+   //return  getTypeSizeOnBits(mode);
+    return 5;
+  }
+  return -1;
+  /*.... change struct? */
+   //  <------------------------------
+  }
+}
+ 
+//----->find last pred functions
+
+static bool 
+keyExistInMap(std::map<int, std::list<rtx_insn*>> theMap, int id){
+  std::map<int,std::list<rtx_insn*>>::iterator theMapIt;
+ 
+ if(theMap.empty())
+  return false;
+
+ theMapIt = theMap.find(id);
+  return (theMapIt != theMap.end());
+}
+
+static void
+insertToMapList(std::map<int, std::list<rtx_insn*>> &theMap,int id, rtx_insn * insn){
+  std::map<int,std::list<rtx_insn*>>::iterator theMapIt;
+  theMapIt=theMap.find(id);
+  theMapIt->second.push_back(insn);
+}
+
+static void
+insertNewNodeToMap(std::map<int, std::list<rtx_insn*>> &theMap,int id, rtx_insn * insn){
+  std::map<int,std::list<rtx_insn*>>::iterator theMapIt;
+  std::list<rtx_insn*> newlist;
+
+  theMap.insert (std::pair<int, std::list<rtx_insn*>>(id,newlist));
+  theMapIt=theMap.find(id);
+  theMapIt->second.push_back(insn);
+
+}
+
+static std::map<int/*BB ID*/,std::list<rtx_insn*> /*def insns in BB with ID =BB_ID*/>
+mapUseDefToBBid( rtx_insn* current_insn ){/*also we have global argumment insn_defs*/
+  std::map<int, std::list<rtx_insn*>> theMap;
+  basic_block currentBB=BLOCK_FOR_INSN(current_insn),defBB;
+  rtx_insn *def_insn;
+  int currentBbIndex=currentBB->index, defBbIndex;
+  std::map<int,std::list<rtx_insn*>>::iterator theMapIt;
+
+  while(!insn_defs.is_empty ()){
+    def_insn=insn_defs.pop();
+    defBB=BLOCK_FOR_INSN(def_insn);
+    defBbIndex=defBB->index;
+
+     if(keyExistInMap(theMap,defBbIndex))
+      insertToMapList(theMap, defBbIndex, def_insn);
+    else
+      insertNewNodeToMap(theMap,defBbIndex,def_insn);
+  }
+ return theMap;
+}
+/*pair first=reg second= insn*/
+static std::list <std::pair< rtx* , rtx* >>
+findLastPredecessors(insns_to_value * node)
+{
+  std::map<int,std::list<rtx_insn*>> BBsInsns;
+  std::list <std::pair< rtx* , rtx * >> s;
+  insn_defs.truncate (0);
+//get_defs (node->current_insn,node->current_expr /*src_reg*/, &insn_defs);
+  if (get_defs (node->current_insn,node->current_expr /*src_reg*/, &insn_defs)!=NULL)// get all insns dependency as list //def use chain
+ {
+    BBsInsns=mapUseDefToBBid(node->current_insn);
+//<<<<---------------------------continue
+ 
+
+
+  }
+  return s;
+}
+
+
+static std::list <rtx*>
+findLastDomLoopInsn(insns_to_value * node){
+  std::list <rtx *> s;
+  //<<<<<<<<<<<<<<<<<<<<----------------continue
+  return s;
+}
+
+static std::list <rtx*>
+findLastPredecessorsInsn(insns_to_value * node){
+  std::list <rtx *> s;
+
+    //<<<<<<<<<<<<<<<<<<<<----------------continue
+  return s;
+}
+static std::list <std::pair<rtx* , rtx*>> 
+mergeInsnsListWithRegInsnList(std::list <rtx *> insnList, std::list <std::pair<rtx* , rtx* >> RtxNodeList, rtx expr)
+{
+ std::list <insns_to_value *>::iterator it_insnList;
+ //for(it_insnList=insnList.begin(); it_insnList != insnList.end(), ++it_insnList){
+    //<<<<<<<<<<<<<------------------------continue
+ //}
+
+
+}
+
+static std::list < rtx * > 
+findLastInsanModifiedDestReg(insns_to_value * node)
+{
+ // std::list <std::pair<rtx* , rtx* >> srcRegsInsn;/* insns from all the src regs*/
+  std::list < rtx* > regInsns;/* for single source reg*/
+
+
+  int numOfOperands, i, firstSrcOp;
+  rtx expr, source;
+  rtx_code code;
+  /* get expr and expr operands number*/
+  expr=getExpr(node);
+  numOfOperands=getNumberOfOperands(expr);
+  /* get first src if ther no src reg it will return numOfOperands */
+  firstSrcOp=firstOperandSrc(node);
+
+  /*if expr not part of loop */
+        if(!isPartOfLoop(node->current_insn)){
+          findLastPredecessors(node);//<<<<<<<<<<<<<<<<<<<<<<<<<<for test
+          regInsns=findLastPredecessorsInsn(node);
+        }
+        else
+          regInsns=findLastDomLoopInsn(node);
+
+       // srcRegsInsn = mergeInsnsListWithRegInsnList(regInsns,srcRegsInsn,source);
+      
+    
+  
+    return regInsns;
+   
+}
+
+static insns_to_value *
+pushInsnToStack(rtx_insn * currentInsn,insns_to_value * father,rtx curr_expr,int opNum,int type, std::stack<insns_to_value*> &stack){
+  insns_to_value *node;
+  // build_insn_to_value_node(rtx_insn *curr_insn,rtx curr_expr,int opernadNum ,insns_to_value *father, int type)
+
+  node=build_insn_to_value_node(currentInsn,curr_expr,opNum,father,type);
+  stack.push(node);
+ return node;
+}
+static void 
+pushOperandsToStack(insns_to_value * currentNode, std::stack<insns_to_value*> &stack){
+   int i, numOfOperands;
+   rtx  expr;//,subExpr
+   insns_to_value *node;
+
+    expr=getExpr(currentNode);
+    numOfOperands=getNumberOfOperands(expr);
+
+   for(i=0; i<numOfOperands; i++){
+    rtx subExpr=XEXP(expr, i);/* to have different  memory locations*/ /***** i need to change it to malloc after that when we exit the block maybe the memory removed*/
+    node=pushInsnToStack(currentNode->current_insn, currentNode, subExpr, i+1, D_BTM_EXPR, stack);
+
+   }
+   
+}
+
+/*if the insn in the node visited means the insn operands value is valid so in that case the function will calculate the current insn value 
+Note: each operand is insn
+if the insn not visited before :
+if the insn is REG find the last insn write to the register and push the last insn and the last insn operands to the stack (try to calculate the last insn value).
+if the insn have more than one opernad (i.e not (constant or REG)) push  the operands to the stack (to calculate the insn value) 
+ */
+static bool 
+calcValue(insns_to_value* node,std::stack<insns_to_value*> &stack){
+  int value;
+   std::list <rtx* > lastInsnM;
+   std::list <rtx*>::iterator itlastInsnM;
+   //std::pair<rtx*, rtx*> regInsnPair;
+
+  bool visited;
+  if(node->type == D_BTM_INSN)
+    visited=InsansIsVisited(node->current_insn);
+  else
+    visited=OperandIsVisited(node);
+
+  insns_to_value *cNode;
+  rtx expr, *pInsn;
+  /* if insn is visited before */
+  if(visited)
+  {
+    /*if constant value that is an integer. i.e CONST_INT,CONST_WIDE_INT,CONST_POLY_INT,CONST_FIXED,CONST_DOUBLE,CONST_VECTOR, CONST, HIGH */
+    if((GET_RTX_CLASS (node->code) == RTX_CONST_OBJ)){
+
+      expr=getExpr(node);
+      value= XINT(expr, 0);/* get operand as int */
+
+      /* if it's the first insn */
+      if(stack.size()==1)
+      {
+        node->value = value;
+        node->valid_value=true;
+      }
+      else
+      {
+        /* push value to father list */
+         node->father->operands_value.push_back(value);
+      }
+
+     
+    }
+    else
+    {
+      /* reaching non constant insn twice means that we cannot calculate it as constant value. 
+       so we calculate the maximum value that the insn can reach depend to on type */
+       value = calcMaxValue(node);
+       if(stack.size()==1)
+      {
+        node->value = value;
+        node->valid_value=true;
+      }
+      else
+      {
+        /* push value to father list */
+        node->father->operands_value.push_back(value);
+      }
+
+    }
+    return true;
+  }
+  else /* insn dose not marked as visited */
+    {
+       
+       /* if insn has one operand and not UNARY insn(did not have sub insn)*/  
+      if(GET_RTX_LENGTH(node->code) == firstOperandSrc(node))
+      {
+        /* if the insn is REG push the last insn that modified the REG before executing and push the insn operands
+         Note: also if the last insn is PHI its ok becouse we push the both PHI operands */
+        if(node->code == REG){
+          lastInsnM = findLastInsanModifiedDestReg(node);
+          //=======>>>>>>>>>>>>>>>> NEED WORK
+          // for(itlastInsnM=lastInsnM.begin(); itlastInsnM != lastInsnM.end(); ++itlastInsnM){
+          //   regInsnPair= *itlastInsnM;
+          //   pInsn=regInsnPair.second;
+          //   //pushInsnToStack(rtx_insn * currentInsn,insns_to_value * father,rtx curr_expr,int opNum,int type, std::stack<insns_to_value*> &stack){
+          //   cNode=pushInsnToStack(node->current_insn,node,*pInsn, 0, D_BTM_INSN, stack);
+          //   pushOperandsToStack(cNode , stack);
+          // }
+
+        }
+      }
+      else
+      {
+        pushOperandsToStack(node, stack);
+      }
+      return false;
+    }
+
+}
+
+
+
+ 
+
+/* return insn value or max value that the insn could have*/
+static int 
+find_insns_value(rtx_insn *curr_insn){
+  std::stack<insns_to_value*> stack;
+  insns_to_value *currentNode;
+
+  stack.push(build_insn_to_value_node(curr_insn, NULL, 0, NULL, D_BTM_INSN));
+  while(!stack.empty())
+  {
+    currentNode=stack.top();
+    if(!calcValue(currentNode,stack))
+    {
+      if(currentNode->type == D_BTM_INSN)
+       markInsnsAsVisited(currentNode->current_insn);  //
+      else
+        markOperandAsVisited(currentNode);
+    }
+    else
+    {
+      stack.pop();
+    }
+
+  }
+  /*first insns visited twice means it have valid value.
+   (the only way to pop node from stack to visit the node twice)*/
+  return currentNode->value;
+}
+/*static int 
+find_data_source(rtx_insn *curr_insn)
+{
+   
+
+  std::stack<insns_to_value*> stack;
+  rtx src, dest,expr;  
+  bool loop_tail=false;//to replace after that 
+  auto_vec<rtx_insn *> insn_defs;
+  rtx_insn *prev_insn,*def_insn;
+  int currentInsnId,prevInsnId=-1,insnDist,lastInsnDist,x;
+  insns_to_value *node,*currnode,*nextnode;
+
+  expr=single_set(curr_insn);
+  insn_defs.truncate (0);
+
+  stack.push(build_insn_to_value_node(curr_insn,NULL,NULL,D_BTM_INSN));
+  while(!stack.empty()){
+
+  }
+  //insns_to_value *dd=stack.top();
+  //insns_to_value *ddd= nested_build_insns_to_value_node_and(curr_insn,dd,stack);
+     
+    //first src reg (operand 0)
+    rtx src_reg = XEXP (SET_SRC (expr), 0);//iq: accses Operand 0 
+   
+   // insn_defs=DF_REF_CHAIN
+    if (get_defs (curr_insn, src_reg, &insn_defs)!= NULL)// get all insns dependency as list //def use chain
+    {*/
+      //not constan?
+      /* get current INSNS ID *//*
+      currentInsnId=INSN_UID(curr_insn);
+
+      //check if this is the first time we process this insins and update the visited list
+      if (g_list_visited_insns.empty())
+        g_list_visited_insns.push_back(currentInsnId);
+      else
+      {
+          g_list_visited_insns_it = std::find(g_list_visited_insns.begin(), g_list_visited_insns.end(), currentInsnId);*/
+          /* if we did not process this insn before push to visited list and process it*/
+       /*   if (g_list_visited_insns_it == g_list_visited_insns.end())
+              g_list_visited_insns.push_back(currentInsnId);
+          else
+          {
+            g_valid_data=false;
+           // return -854568;
+          }
+      }*/
+
+      /* get the basic block where the current insn live */
+   //   basic_block bb = BLOCK_FOR_INSN (curr_insn), defbb;
+      /* intilize the list of predecessors basic blocks*/
+    /*  get_bb_preds_vec(bb);
+    
+if(!g_valid_data)
+  return -854568;
+*/
+       /* get the closest prev insn that write to insn source*/
+    /*  while(!insn_defs.is_empty ()){
+        
+        def_insn=insn_defs.pop();
+        if(prevInsnId==-1){
+          prev_insn=def_insn;
+          prevInsnId=DF_INSN_LUID(def_insn);
+          lastInsnDist=currentInsnId-prevInsnId;
+         }
+          insnDist=currentInsnId-prevInsnId;
+          defbb=BLOCK_FOR_INSN(def_insn);
+
+        //  bb_it=std::find(bb_preds_list.begin(), bb_preds_list.end(), defbb);
+          if(((insnDist<lastInsnDist)&&(insnDist>0))||(loop_tail)
+           || bb_preds_vec_is_containing(defbb) *//*||(bb_it!=bb_preds_list.end())*///) //only for test
+          /*{
+            lastInsnDist=insnDist;
+            prev_insn=def_insn;
+          }
+
+      }*/
+
+     /* expr=single_set(prev_insn);//&(*insn_list)[idx - 1])
+      if (expr != NULL_RTX)
+        *(next_cand->expr) = &(*single_set(prev_insn));*/
+     /* src = SET_SRC (expr);
+      dest = SET_DEST (expr);
+      next_cand->code= GET_CODE (src);
+      next_cand->mode= GET_MODE (dest);
+      next_cand->insn=cand->insn;*/
+
+        //x = find_data_source(curr_insn);
+     /*
+ 
+
+  }
+   //   return x;
+
+  //else {constant or result}
+}*/
 
 /* This function goes through all reaching defs of the source
    of the candidate for elimination (CAND) and tries to combine
@@ -790,112 +1483,115 @@ combine_reaching_defs (ext_cand *cand, const_rtx set_pat, ext_state *state)
   if (copy_needed)
     {
       /* Considering transformation of
-	 (set (reg1) (expression))
-	 ...
-	 (set (reg2) (any_extend (reg1)))
+   (set (reg1) (expression))
+   ...
+   (set (reg2) (any_extend (reg1)))
 
-	 into
+   into
 
-	 (set (reg2) (any_extend (expression)))
-	 (set (reg1) (reg2))
-	 ...  */
+   (set (reg2) (any_extend (expression)))
+   (set (reg1) (reg2))
+   ...  */
 
       /* In theory we could handle more than one reaching def, it
-	 just makes the code to update the insn stream more complex.  */
-      if (state->defs_list.length () != 1)
-	return false;
+   just makes the code to update the insn stream more complex.  */
+  /*    if (state->defs_list.length () != 1)
+  return false;*/
 
       /* We don't have the structure described above if there are
-	 conditional moves in between the def and the candidate,
-	 and we will not handle them correctly.  See PR68194.  */
+   conditional moves in between the def and the candidate,
+   and we will not handle them correctly.  See PR68194.  */
       if (state->copies_list.length () > 0)
-	return false;
+  return false;
 
       /* We require the candidate not already be modified.  It may,
-	 for example have been changed from a (sign_extend (reg))
-	 into (zero_extend (sign_extend (reg))).
+   for example have been changed from a (sign_extend (reg))
+   into (zero_extend (sign_extend (reg))).
 
-	 Handling that case shouldn't be terribly difficult, but the code
-	 here and the code to emit copies would need auditing.  Until
-	 we see a need, this is the safe thing to do.  */
+   Handling that case shouldn't be terribly difficult, but the code
+   here and the code to emit copies would need auditing.  Until
+   we see a need, this is the safe thing to do.  */
       if (state->modified[INSN_UID (cand->insn)].kind != EXT_MODIFIED_NONE)
-	return false;
+  return false;
 
       machine_mode dst_mode = GET_MODE (SET_DEST (set));
       rtx src_reg = get_extended_src_reg (SET_SRC (set));
 
       /* Ensure we can use the src_reg in dst_mode (needed for
-	 the (set (reg1) (reg2)) insn mentioned above).  */
+   the (set (reg1) (reg2)) insn mentioned above).  */
       if (!targetm.hard_regno_mode_ok (REGNO (src_reg), dst_mode))
-	return false;
+  return false;
 
       /* Ensure the number of hard registers of the copy match.  */
       if (hard_regno_nregs (REGNO (src_reg), dst_mode) != REG_NREGS (src_reg))
-	return false;
+  return false;
 
       /* There's only one reaching def.  */
       rtx_insn *def_insn = state->defs_list[0];
 
       /* The defining statement must not have been modified either.  */
       if (state->modified[INSN_UID (def_insn)].kind != EXT_MODIFIED_NONE)
-	return false;
+  return false;
+
+
+//int destval=find_data_source(cand->insn);
+  int destval=find_insns_value(cand->insn);
 
       /* The defining statement and candidate insn must be in the same block.
-	 This is merely to keep the test for safety and updating the insn
-	 stream simple.  Also ensure that within the block the candidate
-	 follows the defining insn.  */
+   This is merely to keep the test for safety and updating the insn
+   stream simple.  Also ensure that within the block the candidate
+   follows the defining insn.  */
       basic_block bb = BLOCK_FOR_INSN (cand->insn);
       if (bb != BLOCK_FOR_INSN (def_insn)
-	  || DF_INSN_LUID (def_insn) > DF_INSN_LUID (cand->insn))
-	return false;
+    || DF_INSN_LUID (def_insn) > DF_INSN_LUID (cand->insn))
+  return false;
 
       /* If there is an overlap between the destination of DEF_INSN and
-	 CAND->insn, then this transformation is not safe.  Note we have
-	 to test in the widened mode.  */
+   CAND->insn, then this transformation is not safe.  Note we have
+   to test in the widened mode.  */
       rtx *dest_sub_rtx = get_sub_rtx (def_insn);
-      if (dest_sub_rtx == NULL
-	  || !REG_P (SET_DEST (*dest_sub_rtx)))
-	return false;
+      if (dest_sub_rtx == NULL)
+  return false;
 
       rtx tmp_reg = gen_rtx_REG (GET_MODE (SET_DEST (set)),
-				 REGNO (SET_DEST (*dest_sub_rtx)));
+         REGNO (SET_DEST (*dest_sub_rtx)));
       if (reg_overlap_mentioned_p (tmp_reg, SET_DEST (set)))
-	return false;
+  return false;
 
       /* On RISC machines we must make sure that changing the mode of SRC_REG
-	 as destination register will not affect its reaching uses, which may
-	 read its value in a larger mode because DEF_INSN implicitly sets it
-	 in word mode.  */
+   as destination register will not affect its reaching uses, which may
+   read its value in a larger mode because DEF_INSN implicitly sets it
+   in word mode.  */
       poly_int64 prec
-	= GET_MODE_PRECISION (GET_MODE (SET_DEST (*dest_sub_rtx)));
+  = GET_MODE_PRECISION (GET_MODE (SET_DEST (*dest_sub_rtx)));
       if (WORD_REGISTER_OPERATIONS && known_lt (prec, BITS_PER_WORD))
-	{
-	  struct df_link *uses = get_uses (def_insn, src_reg);
-	  if (!uses)
-	    return false;
+  {
+    struct df_link *uses = get_uses (def_insn, src_reg);
+    if (!uses)
+      return false;
 
-	  for (df_link *use = uses; use; use = use->next)
-	    if (paradoxical_subreg_p (GET_MODE (*DF_REF_LOC (use->ref)),
-				      GET_MODE (SET_DEST (*dest_sub_rtx))))
-	      return false;
-	}
+    for (df_link *use = uses; use; use = use->next)
+      if (paradoxical_subreg_p (GET_MODE (*DF_REF_LOC (use->ref)),
+              GET_MODE (SET_DEST (*dest_sub_rtx))))
+        return false;
+  }
 
       /* The destination register of the extension insn must not be
-	 used or set between the def_insn and cand->insn exclusive.  */
+   used or set between the def_insn and cand->insn exclusive.  */
       if (reg_used_between_p (SET_DEST (set), def_insn, cand->insn)
-	  || reg_set_between_p (SET_DEST (set), def_insn, cand->insn))
-	return false;
+    || reg_set_between_p (SET_DEST (set), def_insn, cand->insn))
+  return false;
 
       /* We must be able to copy between the two registers.   Generate,
-	 recognize and verify constraints of the copy.  Also fail if this
-	 generated more than one insn.
+   recognize and verify constraints of the copy.  Also fail if this
+   generated more than one insn.
 
          This generates garbage since we throw away the insn when we're
-	 done, only to recreate it later if this test was successful. 
+   done, only to recreate it later if this test was successful. 
 
-	 Make sure to get the mode from the extension (cand->insn).  This
-	 is different than in the code to emit the copy as we have not
-	 modified the defining insn yet.  */
+   Make sure to get the mode from the extension (cand->insn).  This
+   is different than in the code to emit the copy as we have not
+   modified the defining insn yet.  */
       start_sequence ();
       rtx new_dst = gen_rtx_REG (GET_MODE (SET_DEST (set)),
                                  REGNO (get_extended_src_reg (SET_SRC (set))));
@@ -906,84 +1602,83 @@ combine_reaching_defs (ext_cand *cand, const_rtx set_pat, ext_state *state)
       rtx_insn *insn = get_insns ();
       end_sequence ();
       if (NEXT_INSN (insn))
-	return false;
+  return false;
       if (recog_memoized (insn) == -1)
-	return false;
+  return false;
       extract_insn (insn);
       if (!constrain_operands (1, get_preferred_alternatives (insn, bb)))
-	return false;
+  return false;
 
       while (REG_P (SET_SRC (*dest_sub_rtx))
-	     && (REGNO (SET_SRC (*dest_sub_rtx)) == REGNO (SET_DEST (set))))
-	{
-	  /* Considering transformation of
-	     (set (reg2) (expression))
-	     ...
-	     (set (reg1) (reg2))
-	     ...
-	     (set (reg2) (any_extend (reg1)))
+       && (REGNO (SET_SRC (*dest_sub_rtx)) == REGNO (SET_DEST (set))))
+  {
+    /* Considering transformation of
+       (set (reg2) (expression))
+       ...
+       (set (reg1) (reg2))
+       ...
+       (set (reg2) (any_extend (reg1)))
 
-	     into
+       into
 
-	     (set (reg2) (any_extend (expression)))
-	     (set (reg1) (reg2))
-	     ...  */
-	  struct df_link *defs
-	    = get_defs (def_insn, SET_SRC (*dest_sub_rtx), NULL);
-	  if (defs == NULL || defs->next)
-	    break;
+       (set (reg2) (any_extend (expression)))
+       (set (reg1) (reg2))
+       ...  */
+    struct df_link *defs
+      = get_defs (def_insn, SET_SRC (*dest_sub_rtx), NULL);
+    if (defs == NULL || defs->next)
+      break;
 
-	  /* There is only one reaching def.  */
-	  rtx_insn *def_insn2 = DF_REF_INSN (defs->ref);
+    /* There is only one reaching def.  */
+    rtx_insn *def_insn2 = DF_REF_INSN (defs->ref);
 
-	  /* The defining statement must not have been modified either.  */
-	  if (state->modified[INSN_UID (def_insn2)].kind != EXT_MODIFIED_NONE)
-	    break;
+    /* The defining statement must not have been modified either.  */
+    if (state->modified[INSN_UID (def_insn2)].kind != EXT_MODIFIED_NONE)
+      break;
 
-	  /* The def_insn2 and candidate insn must be in the same
-	     block and def_insn follows def_insn2.  */
-	  if (bb != BLOCK_FOR_INSN (def_insn2)
-	      || DF_INSN_LUID (def_insn2) > DF_INSN_LUID (def_insn))
-	    break;
+    /* The def_insn2 and candidate insn must be in the same
+       block and def_insn follows def_insn2.  */
+    if (bb != BLOCK_FOR_INSN (def_insn2)
+        || DF_INSN_LUID (def_insn2) > DF_INSN_LUID (def_insn))
+      break;
 
-	  rtx *dest_sub_rtx2 = get_sub_rtx (def_insn2);
-	  if (dest_sub_rtx2 == NULL
-	      || !REG_P (SET_DEST (*dest_sub_rtx2)))
-	    break;
+    rtx *dest_sub_rtx2 = get_sub_rtx (def_insn2);
+    if (dest_sub_rtx2 == NULL)
+      break;
 
-	  /* On RISC machines we must make sure that changing the mode of
-	     SRC_REG as destination register will not affect its reaching
-	     uses, which may read its value in a larger mode because DEF_INSN
-	     implicitly sets it in word mode.  */
-	  if (WORD_REGISTER_OPERATIONS && known_lt (prec, BITS_PER_WORD))
-	    {
-	      struct df_link *uses = get_uses (def_insn2, SET_DEST (set));
-	      if (!uses)
-		break;
+    /* On RISC machines we must make sure that changing the mode of
+       SRC_REG as destination register will not affect its reaching
+       uses, which may read its value in a larger mode because DEF_INSN
+       implicitly sets it in word mode.  */
+    if (WORD_REGISTER_OPERATIONS && known_lt (prec, BITS_PER_WORD))
+      {
+        struct df_link *uses = get_uses (def_insn2, SET_DEST (set));
+        if (!uses)
+    break;
 
-	      df_link *use;
-	      rtx dest2 = SET_DEST (*dest_sub_rtx2);
-	      for (use = uses; use; use = use->next)
-		if (paradoxical_subreg_p (GET_MODE (*DF_REF_LOC (use->ref)),
-					  GET_MODE (dest2)))
-		  break;
-	      if (use)
-		break;
-	    }
+        df_link *use;
+        rtx dest2 = SET_DEST (*dest_sub_rtx2);
+        for (use = uses; use; use = use->next)
+    if (paradoxical_subreg_p (GET_MODE (*DF_REF_LOC (use->ref)),
+            GET_MODE (dest2)))
+      break;
+        if (use)
+    break;
+      }
 
-	  /* The destination register of the extension insn must not be
-	     used or set between the def_insn2 and def_insn exclusive.
-	     Likewise for the other reg, i.e. check both reg1 and reg2
-	     in the above comment.  */
-	  if (reg_used_between_p (SET_DEST (set), def_insn2, def_insn)
-	      || reg_set_between_p (SET_DEST (set), def_insn2, def_insn)
-	      || reg_used_between_p (src_reg, def_insn2, def_insn)
-	      || reg_set_between_p (src_reg, def_insn2, def_insn))
-	    break;
+    /* The destination register of the extension insn must not be
+       used or set between the def_insn2 and def_insn exclusive.
+       Likewise for the other reg, i.e. check both reg1 and reg2
+       in the above comment.  */
+    if (reg_used_between_p (SET_DEST (set), def_insn2, def_insn)
+        || reg_set_between_p (SET_DEST (set), def_insn2, def_insn)
+        || reg_used_between_p (src_reg, def_insn2, def_insn)
+        || reg_set_between_p (src_reg, def_insn2, def_insn))
+      break;
 
-	  state->defs_list[0] = def_insn2;
-	  break;
-	}
+    state->defs_list[0] = def_insn2;
+    break;
+  }
     }
 
   /* If cand->insn has been already modified, update cand->mode to a wider
@@ -993,14 +1688,14 @@ combine_reaching_defs (ext_cand *cand, const_rtx set_pat, ext_state *state)
       machine_mode mode;
 
       if (state->modified[INSN_UID (cand->insn)].kind
-	  != (cand->code == ZERO_EXTEND
-	      ? EXT_MODIFIED_ZEXT : EXT_MODIFIED_SEXT)
-	  || state->modified[INSN_UID (cand->insn)].mode != cand->mode
-	  || (set == NULL_RTX))
-	return false;
+    != (cand->code == ZERO_EXTEND
+        ? EXT_MODIFIED_ZEXT : EXT_MODIFIED_SEXT)
+    || state->modified[INSN_UID (cand->insn)].mode != cand->mode
+    || (set == NULL_RTX))
+  return false;
       mode = GET_MODE (SET_DEST (set));
       gcc_assert (GET_MODE_UNIT_SIZE (mode)
-		  >= GET_MODE_UNIT_SIZE (cand->mode));
+      >= GET_MODE_UNIT_SIZE (cand->mode));
       cand->mode = mode;
     }
 
@@ -1012,7 +1707,7 @@ combine_reaching_defs (ext_cand *cand, const_rtx set_pat, ext_state *state)
   FOR_EACH_VEC_ELT (state->defs_list, defs_ix, def_insn)
     {
       if (merge_def_and_ext (cand, def_insn, state))
-	state->modified_list.safe_push (def_insn);
+  state->modified_list.safe_push (def_insn);
       else
         {
           merge_successful = false;
@@ -1027,7 +1722,7 @@ combine_reaching_defs (ext_cand *cand, const_rtx set_pat, ext_state *state)
       FOR_EACH_VEC_ELT (state->copies_list, i, def_insn)
         {
           if (transform_ifelse (cand, def_insn))
-	    state->modified_list.safe_push (def_insn);
+      state->modified_list.safe_push (def_insn);
           else
             {
               merge_successful = false;
@@ -1039,25 +1734,25 @@ combine_reaching_defs (ext_cand *cand, const_rtx set_pat, ext_state *state)
   if (merge_successful)
     {
       /* Commit the changes here if possible
-	 FIXME: It's an all-or-nothing scenario.  Even if only one definition
-	 cannot be merged, we entirely give up.  In the future, we should allow
-	 extensions to be partially eliminated along those paths where the
-	 definitions could be merged.  */
+   FIXME: It's an all-or-nothing scenario.  Even if only one definition
+   cannot be merged, we entirely give up.  In the future, we should allow
+   extensions to be partially eliminated along those paths where the
+   definitions could be merged.  */
       if (apply_change_group ())
         {
           if (dump_file)
             fprintf (dump_file, "All merges were successful.\n");
 
-	  FOR_EACH_VEC_ELT (state->modified_list, i, def_insn)
-	    {
-	      ext_modified *modified = &state->modified[INSN_UID (def_insn)];
-	      if (modified->kind == EXT_MODIFIED_NONE)
-		modified->kind = (cand->code == ZERO_EXTEND ? EXT_MODIFIED_ZEXT
-						            : EXT_MODIFIED_SEXT);
+    FOR_EACH_VEC_ELT (state->modified_list, i, def_insn)
+      {
+        ext_modified *modified = &state->modified[INSN_UID (def_insn)];
+        if (modified->kind == EXT_MODIFIED_NONE)
+    modified->kind = (cand->code == ZERO_EXTEND ? EXT_MODIFIED_ZEXT
+                        : EXT_MODIFIED_SEXT);
 
-	      if (copy_needed)
-		modified->do_not_reextend = 1;
-	    }
+        if (copy_needed)
+    modified->do_not_reextend = 1;
+      }
           return true;
         }
       else
@@ -1067,10 +1762,10 @@ combine_reaching_defs (ext_cand *cand, const_rtx set_pat, ext_state *state)
              purposes.  This extension cannot be deleted.  */
           if (dump_file)
             {
-	      fprintf (dump_file,
-		       "Merge cancelled, non-mergeable definitions:\n");
-	      FOR_EACH_VEC_ELT (state->modified_list, i, def_insn)
-	        print_rtl_single (dump_file, def_insn);
+        fprintf (dump_file,
+           "Merge cancelled, non-mergeable definitions:\n");
+        FOR_EACH_VEC_ELT (state->modified_list, i, def_insn)
+          print_rtl_single (dump_file, def_insn);
             }
         }
     }
@@ -1087,9 +1782,9 @@ combine_reaching_defs (ext_cand *cand, const_rtx set_pat, ext_state *state)
 
 static void
 add_removable_extension (const_rtx expr, rtx_insn *insn,
-			 vec<ext_cand> *insn_list,
-			 unsigned *def_map,
-			 bitmap init_regs)
+       vec<ext_cand> *insn_list,
+       unsigned *def_map,
+       bitmap init_regs)
 {
   enum rtx_code code;
   machine_mode mode;
@@ -1114,105 +1809,105 @@ add_removable_extension (const_rtx expr, rtx_insn *insn,
       ext_cand *cand;
 
       /* Zero-extension of an undefined value is partly defined (it's
-	 completely undefined for sign-extension, though).  So if there exists
-	 a path from the entry to this zero-extension that leaves this register
-	 uninitialized, removing the extension could change the behavior of
-	 correct programs.  So first, check it is not the case.  */
+   completely undefined for sign-extension, though).  So if there exists
+   a path from the entry to this zero-extension that leaves this register
+   uninitialized, removing the extension could change the behavior of
+   correct programs.  So first, check it is not the case.  */
       if (code == ZERO_EXTEND && !bitmap_bit_p (init_regs, REGNO (reg)))
-	{
-	  if (dump_file)
-	    {
-	      fprintf (dump_file, "Cannot eliminate extension:\n");
-	      print_rtl_single (dump_file, insn);
-	      fprintf (dump_file, " because it can operate on uninitialized"
-			          " data\n");
-	    }
-	  return;
-	}
+  {
+    if (dump_file)
+      {
+        fprintf (dump_file, "Cannot eliminate extension:\n");
+        print_rtl_single (dump_file, insn);
+        fprintf (dump_file, " because it can operate on uninitialized"
+                " data\n");
+      }
+    return;
+  }
 
       /* Second, make sure we can get all the reaching definitions.  */
       defs = get_defs (insn, reg, NULL);
       if (!defs)
-	{
-	  if (dump_file)
-	    {
-	      fprintf (dump_file, "Cannot eliminate extension:\n");
-	      print_rtl_single (dump_file, insn);
-	      fprintf (dump_file, " because of missing definition(s)\n");
-	    }
-	  return;
-	}
+  {
+    if (dump_file)
+      {
+        fprintf (dump_file, "Cannot eliminate extension:\n");
+        print_rtl_single (dump_file, insn);
+        fprintf (dump_file, " because of missing definition(s)\n");
+      }
+    return;
+  }
 
       /* Third, make sure the reaching definitions don't feed another and
-	 different extension.  FIXME: this obviously can be improved.  */
+   different extension.  FIXME: this obviously can be improved.  */
       for (def = defs; def; def = def->next)
-	if ((idx = def_map[INSN_UID (DF_REF_INSN (def->ref))])
-	    && idx != -1U
-	    && (cand = &(*insn_list)[idx - 1])
-	    && cand->code != code)
-	  {
-	    if (dump_file)
-	      {
-	        fprintf (dump_file, "Cannot eliminate extension:\n");
-		print_rtl_single (dump_file, insn);
-	        fprintf (dump_file, " because of other extension\n");
-	      }
-	    return;
-	  }
-	/* For vector mode extensions, ensure that all uses of the
-	   XEXP (src, 0) register are in insn or debug insns, as unlike
-	   integral extensions lowpart subreg of the sign/zero extended
-	   register are not equal to the original register, so we have
-	   to change all uses or none and the current code isn't able
-	   to change them all at once in one transaction.  */
-	else if (VECTOR_MODE_P (GET_MODE (XEXP (src, 0))))
-	  {
-	    if (idx == 0)
-	      {
-		struct df_link *ref_chain, *ref_link;
+  if ((idx = def_map[INSN_UID (DF_REF_INSN (def->ref))])
+      && idx != -1U
+      && (cand = &(*insn_list)[idx - 1])
+      && cand->code != code)
+    {
+      if (dump_file)
+        {
+          fprintf (dump_file, "Cannot eliminate extension:\n");
+    print_rtl_single (dump_file, insn);
+          fprintf (dump_file, " because of other extension\n");
+        }
+      return;
+    }
+  /* For vector mode extensions, ensure that all uses of the
+     XEXP (src, 0) register are in insn or debug insns, as unlike
+     integral extensions lowpart subreg of the sign/zero extended
+     register are not equal to the original register, so we have
+     to change all uses or none and the current code isn't able
+     to change them all at once in one transaction.  */
+  else if (VECTOR_MODE_P (GET_MODE (XEXP (src, 0))))
+    {
+      if (idx == 0)
+        {
+    struct df_link *ref_chain, *ref_link;
 
-		ref_chain = DF_REF_CHAIN (def->ref);
-		for (ref_link = ref_chain; ref_link; ref_link = ref_link->next)
-		  {
-		    if (ref_link->ref == NULL
-			|| DF_REF_INSN_INFO (ref_link->ref) == NULL)
-		      {
-			idx = -1U;
-			break;
-		      }
-		    rtx_insn *use_insn = DF_REF_INSN (ref_link->ref);
-		    if (use_insn != insn && !DEBUG_INSN_P (use_insn))
-		      {
-			idx = -1U;
-			break;
-		      }
-		  }
-		if (idx == -1U)
-		  def_map[INSN_UID (DF_REF_INSN (def->ref))] = idx;
-	      }
-	    if (idx == -1U)
-	      {
-		if (dump_file)
-		  {
-		    fprintf (dump_file, "Cannot eliminate extension:\n");
-		    print_rtl_single (dump_file, insn);
-		    fprintf (dump_file,
-			     " because some vector uses aren't extension\n");
-		  }
-		return;
-	      }
-	  }
+    ref_chain = DF_REF_CHAIN (def->ref);
+    for (ref_link = ref_chain; ref_link; ref_link = ref_link->next)
+      {
+        if (ref_link->ref == NULL
+      || DF_REF_INSN_INFO (ref_link->ref) == NULL)
+          {
+      idx = -1U;
+      break;
+          }
+        rtx_insn *use_insn = DF_REF_INSN (ref_link->ref);
+        if (use_insn != insn && !DEBUG_INSN_P (use_insn))
+          {
+      idx = -1U;
+      break;
+          }
+      }
+    if (idx == -1U)
+      def_map[INSN_UID (DF_REF_INSN (def->ref))] = idx;
+        }
+      if (idx == -1U)
+        {
+    if (dump_file)
+      {
+        fprintf (dump_file, "Cannot eliminate extension:\n");
+        print_rtl_single (dump_file, insn);
+        fprintf (dump_file,
+           " because some vector uses aren't extension\n");
+      }
+    return;
+        }
+    }
 
       /* Fourth, if the extended version occupies more registers than the
-	 original and the source of the extension is the same hard register
-	 as the destination of the extension, then we cannot eliminate
-	 the extension without deep analysis, so just punt.
+   original and the source of the extension is the same hard register
+   as the destination of the extension, then we cannot eliminate
+   the extension without deep analysis, so just punt.
 
-	 We allow this when the registers are different because the
-	 code in combine_reaching_defs will handle that case correctly.  */
+   We allow this when the registers are different because the
+   code in combine_reaching_defs will handle that case correctly.  */
       if (hard_regno_nregs (REGNO (dest), mode) != REG_NREGS (reg)
-	  && reg_overlap_mentioned_p (dest, reg))
-	return;
+    && reg_overlap_mentioned_p (dest, reg))
+  return;
 
       /* Then add the candidate to the list and insert the reaching definitions
          into the definition map.  */
@@ -1221,7 +1916,7 @@ add_removable_extension (const_rtx expr, rtx_insn *insn,
       idx = insn_list->length ();
 
       for (def = defs; def; def = def->next)
-	def_map[INSN_UID (DF_REF_INSN (def->ref))] = idx;
+  def_map[INSN_UID (DF_REF_INSN (def->ref))] = idx;
     }
 }
 
@@ -1249,19 +1944,19 @@ find_removable_extensions (void)
       bitmap_clear (&kill);
       bitmap_clear (&gen);
 
-      FOR_BB_INSNS (bb, insn)
-	{
-	  if (NONDEBUG_INSN_P (insn))
-	    {
-	      set = single_set (insn);
-	      if (set != NULL_RTX)
-		add_removable_extension (set, insn, &insn_list, def_map,
-					 &init);
-	      df_mir_simulate_one_insn (bb, insn, &kill, &gen);
-	      bitmap_ior_and_compl (&tmp, &gen, &init, &kill);
-	      bitmap_copy (&init, &tmp);
-	    }
-	}
+      FOR_BB_INSNS (bb, insn)//<<<<<<----- 
+  {
+    if (NONDEBUG_INSN_P (insn))
+      {
+        set = single_set (insn);
+        if (set != NULL_RTX)
+    add_removable_extension (set, insn, &insn_list, def_map,
+           &init);
+        df_mir_simulate_one_insn (bb, insn, &kill, &gen);
+        bitmap_ior_and_compl (&tmp, &gen, &init, &kill);
+        bitmap_copy (&init, &tmp);
+      }
+  }
     }
 
   XDELETEVEC (def_map);
@@ -1315,19 +2010,19 @@ find_and_remove_re (void)
           if (dump_file)
             fprintf (dump_file, "Eliminated the extension.\n");
           num_realized++;
-	  /* If the RHS of the current candidate is not (extend (reg)), then
-	     we do not allow the optimization of extensions where
-	     the source and destination registers do not match.  Thus
-	     checking REG_P here is correct.  */
-	  rtx set = single_set (curr_cand->insn);
-	  if (REG_P (XEXP (SET_SRC (set), 0))
-	      && (REGNO (SET_DEST (set)) != REGNO (XEXP (SET_SRC (set), 0))))
-	    {
+    /* If the RHS of the current candidate is not (extend (reg)), then
+       we do not allow the optimization of extensions where
+       the source and destination registers do not match.  Thus
+       checking REG_P here is correct.  */
+    rtx set = single_set (curr_cand->insn);
+    if (REG_P (XEXP (SET_SRC (set), 0))
+        && (REGNO (SET_DEST (set)) != REGNO (XEXP (SET_SRC (set), 0))))
+      {
               reinsn_copy_list.safe_push (curr_cand->insn);
               reinsn_copy_list.safe_push (state.defs_list[0]);
-	    }
-	  reinsn_del_list.safe_push (curr_cand->insn);
-	  state.modified[INSN_UID (curr_cand->insn)].deleted = 1;
+      }
+    reinsn_del_list.safe_push (curr_cand->insn);
+    state.modified[INSN_UID (curr_cand->insn)].deleted = 1;
         }
     }
 
@@ -1351,15 +2046,15 @@ find_and_remove_re (void)
       rtx_insn *def_insn = reinsn_copy_list[i + 1];
 
       /* Use the mode of the destination of the defining insn
-	 for the mode of the copy.  This is necessary if the
-	 defining insn was used to eliminate a second extension
-	 that was wider than the first.  */
+   for the mode of the copy.  This is necessary if the
+   defining insn was used to eliminate a second extension
+   that was wider than the first.  */
       rtx sub_rtx = *get_sub_rtx (def_insn);
       rtx set = single_set (curr_insn);
       rtx new_dst = gen_rtx_REG (GET_MODE (SET_DEST (sub_rtx)),
-				 REGNO (XEXP (SET_SRC (set), 0)));
+         REGNO (XEXP (SET_SRC (set), 0)));
       rtx new_src = gen_rtx_REG (GET_MODE (SET_DEST (sub_rtx)),
-				 REGNO (SET_DEST (set)));
+         REGNO (SET_DEST (set)));
       rtx new_set = gen_rtx_SET (new_dst, new_src);
       emit_insn_after (new_set, def_insn);
     }
@@ -1373,7 +2068,7 @@ find_and_remove_re (void)
 
   if (dump_file && num_re_opportunities > 0)
     fprintf (dump_file, "Elimination opportunities = %d realized = %d\n",
-	     num_re_opportunities, num_realized);
+       num_re_opportunities, num_realized);
 }
 
 /* Find and remove redundant extensions.  */
@@ -1420,3 +2115,8 @@ make_pass_ree (gcc::context *ctxt)
 {
   return new pass_ree (ctxt);
 }
+
+
+
+
+ 
