@@ -260,6 +260,12 @@ struct insns_to_value
   bool valid_value;
 };
 
+std::list<int> g_list_visited_insns;    
+std::list<int>::iterator g_list_visited_insns_it;
+bool g_valid_data=true;
+std::list<basic_block>::iterator bb_it;
+auto_vec<basic_block > bb_preds_vec;
+auto_vec<rtx_insn *> insn_defs;
 struct ext_cand
 {
   /* The expression.  */
@@ -275,55 +281,37 @@ struct ext_cand
   rtx_insn *insn;
 };
 
-std::list<int> g_list_visited_insns;    
-std::list<int>::iterator g_list_visited_insns_it;
-bool g_valid_data=true;
- 
-std::list<basic_block>::iterator bb_it;
 
-auto_vec<basic_block > bb_preds_vec;
-auto_vec<rtx_insn *> insn_defs;
 
 static int max_insn_uid;
 
-static bool 
-bb_preds_vec_is_containing(basic_block cbb)
-{
-  bool f;
-  if(bb_preds_vec.is_empty ())
-    return false;
 
-  basic_block bb=bb_preds_vec.pop();
 
-  if(bb == cbb)
-  {
-    bb_preds_vec.safe_push(bb);
-    return true;
-  }
-  f=bb_preds_vec_is_containing(cbb); 
-  bb_preds_vec.safe_push(bb);
-  return  f;
-} 
 
-static void
-get_bb_preds_vec(basic_block bb ){
-  bb_preds_vec.truncate (0);
-  while(bb->prev_bb){
-    if(bb->prev_bb != NULL)
-      bb_preds_vec.safe_push (bb->prev_bb);
-    bb=bb->prev_bb;
-  }
- }
-
-static std::list<basic_block> 
+/* sorted list of curent and  preds BBs*/
+static std::list<int> 
 get_bb_preds(basic_block bb ){
-  std::list<basic_block>bb_preds_list;
- 
-  while(bb->prev_bb){
-    if(bb->prev_bb != NULL)
-    bb_preds_list.push_back(bb->prev_bb);
+  std::list<int>bb_preds_list;
+  std::list<int>::iterator visited_bb_it;
+  
+  if(bb==NULL)
+    return bb_preds_list;
+
+ bb_preds_list.push_back(bb->index);
+
+  while(bb->prev_bb!= NULL){
+
+    /* check if BB visited if visited return the list*/
+    visited_bb_it= std::find(bb_preds_list.begin(), bb_preds_list.end(), bb->prev_bb->index);
+    if (visited_bb_it != bb_preds_list.end())
+        return bb_preds_list;
+
+
+    /*if not visted push it to list*/
+    bb_preds_list.push_back(bb->prev_bb->index);
     bb=bb->prev_bb;
   }
+
   return bb_preds_list;
 }
 
@@ -1345,103 +1333,8 @@ find_insns_value(rtx_insn *curr_insn){
    (the only way to pop node from stack to visit the node twice)*/
   return currentNode->value;
 }
-/*static int 
-find_data_source(rtx_insn *curr_insn)
-{
-   
 
-  std::stack<insns_to_value*> stack;
-  rtx src, dest,expr;  
-  bool loop_tail=false;//to replace after that 
-  auto_vec<rtx_insn *> insn_defs;
-  rtx_insn *prev_insn,*def_insn;
-  int currentInsnId,prevInsnId=-1,insnDist,lastInsnDist,x;
-  insns_to_value *node,*currnode,*nextnode;
 
-  expr=single_set(curr_insn);
-  insn_defs.truncate (0);
-
-  stack.push(build_insn_to_value_node(curr_insn,NULL,NULL,D_BTM_INSN));
-  while(!stack.empty()){
-
-  }
-  //insns_to_value *dd=stack.top();
-  //insns_to_value *ddd= nested_build_insns_to_value_node_and(curr_insn,dd,stack);
-     
-    //first src reg (operand 0)
-    rtx src_reg = XEXP (SET_SRC (expr), 0);//iq: accses Operand 0 
-   
-   // insn_defs=DF_REF_CHAIN
-    if (get_defs (curr_insn, src_reg, &insn_defs)!= NULL)// get all insns dependency as list //def use chain
-    {*/
-      //not constan?
-      /* get current INSNS ID *//*
-      currentInsnId=INSN_UID(curr_insn);
-
-      //check if this is the first time we process this insins and update the visited list
-      if (g_list_visited_insns.empty())
-        g_list_visited_insns.push_back(currentInsnId);
-      else
-      {
-          g_list_visited_insns_it = std::find(g_list_visited_insns.begin(), g_list_visited_insns.end(), currentInsnId);*/
-          /* if we did not process this insn before push to visited list and process it*/
-       /*   if (g_list_visited_insns_it == g_list_visited_insns.end())
-              g_list_visited_insns.push_back(currentInsnId);
-          else
-          {
-            g_valid_data=false;
-           // return -854568;
-          }
-      }*/
-
-      /* get the basic block where the current insn live */
-   //   basic_block bb = BLOCK_FOR_INSN (curr_insn), defbb;
-      /* intilize the list of predecessors basic blocks*/
-    /*  get_bb_preds_vec(bb);
-    
-if(!g_valid_data)
-  return -854568;
-*/
-       /* get the closest prev insn that write to insn source*/
-    /*  while(!insn_defs.is_empty ()){
-        
-        def_insn=insn_defs.pop();
-        if(prevInsnId==-1){
-          prev_insn=def_insn;
-          prevInsnId=DF_INSN_LUID(def_insn);
-          lastInsnDist=currentInsnId-prevInsnId;
-         }
-          insnDist=currentInsnId-prevInsnId;
-          defbb=BLOCK_FOR_INSN(def_insn);
-
-        //  bb_it=std::find(bb_preds_list.begin(), bb_preds_list.end(), defbb);
-          if(((insnDist<lastInsnDist)&&(insnDist>0))||(loop_tail)
-           || bb_preds_vec_is_containing(defbb) *//*||(bb_it!=bb_preds_list.end())*///) //only for test
-          /*{
-            lastInsnDist=insnDist;
-            prev_insn=def_insn;
-          }
-
-      }*/
-
-     /* expr=single_set(prev_insn);//&(*insn_list)[idx - 1])
-      if (expr != NULL_RTX)
-        *(next_cand->expr) = &(*single_set(prev_insn));*/
-     /* src = SET_SRC (expr);
-      dest = SET_DEST (expr);
-      next_cand->code= GET_CODE (src);
-      next_cand->mode= GET_MODE (dest);
-      next_cand->insn=cand->insn;*/
-
-        //x = find_data_source(curr_insn);
-     /*
- 
-
-  }
-   //   return x;
-
-  //else {constant or result}
-}*/
 
 /* This function goes through all reaching defs of the source
    of the candidate for elimination (CAND) and tries to combine
