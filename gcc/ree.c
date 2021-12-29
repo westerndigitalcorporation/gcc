@@ -896,8 +896,8 @@ InsansIsVisited(rtx_insn *curr_insn)
 static int
 calcOpernadId(insns_to_value * node){
   int exprId,insnId,exprShift=10,tempInId;
- insns_to_value * temp = node->father;
-  insnId=temp->id;
+ insns_to_value * fatherNode = node->father;
+  insnId=fatherNode->id;
   tempInId=insnId;
 
   while(tempInId > 9){
@@ -905,7 +905,7 @@ calcOpernadId(insns_to_value * node){
     tempInId=tempInId/10;
   }
 
-  exprId=(exprShift * node->opernadNum) + 11; // exprId= num|unique == unique
+  exprId=(exprShift * node->opernadNum) + insnId; // exprId= num|unique == unique
 
   return exprId;
 }
@@ -1035,8 +1035,12 @@ keyExistInMap(std::map<int, std::list<rtx_insn*>> theMap, int id){
 
 static void
 insertToMapList(std::map<int, std::list<rtx_insn*>> &theMap,int id, rtx_insn * insn){
+
   std::map<int,std::list<rtx_insn*>>::iterator theMapIt;
+  
+  /* find BasicBlock definsns List*/
   theMapIt=theMap.find(id);
+  /* push insn to BB List */
   theMapIt->second.push_back(insn);
 }
 
@@ -1044,21 +1048,24 @@ static void
 insertNewNodeToMap(std::map<int, std::list<rtx_insn*>> &theMap,int id, rtx_insn * insn){
   std::map<int,std::list<rtx_insn*>>::iterator theMapIt;
   std::list<rtx_insn*> newlist;
-
+  /* push new node with empty list */
   theMap.insert (std::pair<int, std::list<rtx_insn*>>(id,newlist));
+  /* go to new node location */
   theMapIt=theMap.find(id);
+  /* insert the insn to the new node List*/
   theMapIt->second.push_back(insn);
 
 }
 
 static std::map<int/*BB ID*/,std::list<rtx_insn*> /*def insns in BB with ID =BB_ID*/>
 mapUseDefToBBid( rtx_insn* current_insn ){/*also we have global argumment insn_defs*/
+
   std::map<int, std::list<rtx_insn*>> theMap;
   basic_block currentBB=BLOCK_FOR_INSN(current_insn),defBB;
   rtx_insn *def_insn;
   int currentBbIndex=currentBB->index, defBbIndex;
   std::map<int,std::list<rtx_insn*>>::iterator theMapIt;
-
+ /* */
   while(!insn_defs.is_empty ()){
     def_insn=insn_defs.pop();
     defBB=BLOCK_FOR_INSN(def_insn);
@@ -1071,23 +1078,21 @@ mapUseDefToBBid( rtx_insn* current_insn ){/*also we have global argumment insn_d
   }
  return theMap;
 }
-/*pair first=reg second= insn*/
-static std::list <std::pair< rtx* , rtx* >>
-findLastPredecessors(insns_to_value * node)
+/*pair first=reg index second= insn*/
+std::map<int,std::list<rtx_insn*>>
+getDefsPerBasicBlock(insns_to_value * node)
 {
   std::map<int,std::list<rtx_insn*>> BBsInsns;
-  std::list <std::pair< rtx* , rtx * >> s;
   insn_defs.truncate (0);
-//get_defs (node->current_insn,node->current_expr /*src_reg*/, &insn_defs);
+
   if (get_defs (node->current_insn,node->current_expr /*src_reg*/, &insn_defs)!=NULL)// get all insns dependency as list //def use chain
- {
+  {
+    /* insert the insns into map 
+      (Basic block Index) --> ( Basic Block def use Insns)*/
     BBsInsns=mapUseDefToBBid(node->current_insn);
-//<<<<---------------------------continue
- 
-
-
   }
-  return s;
+  
+  return BBsInsns;
 }
 
 
@@ -1121,7 +1126,7 @@ findLastInsanModifiedDestReg(insns_to_value * node)
 {
  // std::list <std::pair<rtx* , rtx* >> srcRegsInsn;/* insns from all the src regs*/
   std::list < rtx* > regInsns;/* for single source reg*/
-
+  std::map<int,std::list<rtx_insn*>> defsToBBmap;
 
   int numOfOperands, i, firstSrcOp;
   rtx expr, source;
@@ -1136,7 +1141,7 @@ findLastInsanModifiedDestReg(insns_to_value * node)
   if(node->opernadNum > firstSrcOp)
   {
         if(!isPartOfLoop(node->current_insn)){
-          findLastPredecessors(node);//<<<<<<<<<<<<<<<<<<<<<<<<<<for test
+          defsToBBmap=getDefsPerBasicBlock(node);
           regInsns=findLastPredecessorsInsn(node);
         }
         else
