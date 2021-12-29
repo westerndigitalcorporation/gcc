@@ -1139,24 +1139,54 @@ int bbId;
     }
 
     predsBBindex.pop_front();
-    
+
   }
 return -1; /* not found*/ 
 }
+
+static rtx_insn* 
+getBBLastInsn(std::list<rtx_insn*> defInsnsList){
+  int maxId;
+  std::list<rtx_insn *>::iterator defListIter;
+  for(defListIter=defInsnsList.begin(); defListIter != defInsnsList.end(); ++defListIter){
+
+  }
+}
+static rtx_insn* 
+getBBLastInsnBeforCurrentInsn(  std::list<rtx_insn*> defInsnsList, rtx_insn *currentInsn){
+
+}
+static rtx_insn* 
+getBBLastInsanModifiedDestReg(int WantedBBindex, std::list<rtx_insn*> defInsnsList, rtx_insn *currentInsn){
+  basic_block currentInsnBB, defBb;
+ 
+  currentInsnBB=BLOCK_FOR_INSN(currentInsn);
+
+    if(WantedBBindex != currentInsnBB->index)
+      return getBBLastInsn(defInsnsList);
+    else
+      return getBBLastInsnBeforCurrentInsn(defInsnsList,currentInsn);
+
+}
+
 static std::list < rtx * > 
 findLastInsanModifiedDestReg(insns_to_value * node)
 {
  // std::list <std::pair<rtx* , rtx* >> srcRegsInsn;/* insns from all the src regs*/
   std::list < rtx* > regInsns;/* for single source reg*/
   std::map<int,std::list<rtx_insn*>> defsToBBmap;
+  std::map<int,std::list<rtx_insn*>>::iterator defsToBBmapIter;
+
   std::list<int> predsBBindex;
+  rtx_insn *currentInsn, *resultInsn;
+  currentInsn = node->current_insn;
 
 
-  int numOfOperands, i, firstSrcOp,wantedBB;
+  int numOfOperands, i, firstSrcOp, wantedBBindex, predBBindex;
   rtx expr, source;
   rtx_code code;
   basic_block currentBB;
-  int predBBindex;
+ 
   /* get expr and expr operands number*/
   expr=getExpr(node);
   numOfOperands=getNumberOfOperands(expr);
@@ -1171,8 +1201,12 @@ findLastInsanModifiedDestReg(insns_to_value * node)
           defsToBBmap=getDefsPerBasicBlock(node);
           /* get sorted list with current/pred BBs*/
           predsBBindex=get_bb_preds(currentBB);
-          wantedBB=getClosestBBwithUseDef(defsToBBmap,predsBBindex);
-
+          /* get closest BB with index*/
+          wantedBBindex=getClosestBBwithUseDef(defsToBBmap,predsBBindex);
+          /* to get closest BB use-def insns list*/
+          defsToBBmapIter = defsToBBmap.find(wantedBBindex);
+          /* the wanted insn*/
+          resultInsn=getBBLastInsanModifiedDestReg(wantedBBindex, defsToBBmapIter->second, currentInsn);
 
           //regInsns=findLastPredecessorsInsn(node);
         }
