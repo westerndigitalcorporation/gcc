@@ -257,6 +257,7 @@ struct insns_to_value
   rtx_code code;
   int value;
   int opernadNum;
+  int id;
   bool valid_value;
 };
 
@@ -894,20 +895,30 @@ InsansIsVisited(rtx_insn *curr_insn)
 /* return unique ID to operand */
 static int
 calcOpernadId(insns_to_value * node){
-int exprId,insnId,exprShift=10,tempInId;
-//rtx_insn * temp=node->current_insn;
-if(node->current_insn!=RTX_INSN_NULL)
-  insnId=INSN_UID(node->current_insn);//unique <<<<<<<<<<<<<<<<<<<<<<<<<bug
-tempInId=insnId;
+  int exprId,insnId,exprShift=10,tempInId;
+  insns_to_value * temp = node->father;
+  insnId=temp->id;
+  tempInId=insnId;
 
-while(tempInId > 9){
-  exprShift=exprShift*10;
-  tempInId=tempInId/10;
+  while(tempInId > 9){
+    exprShift=exprShift*10;
+    tempInId=tempInId/10;
+  }
+
+  exprId=(exprShift * node->opernadNum) + insnId; // exprId= num|unique == unique
+
+  return exprId;
 }
-
-exprId=(exprShift * node->opernadNum) + insnId; // exprId= num|unique == unique
-
-return exprId;
+/* calculate node insn/expr ID*/
+static int 
+calcId(insns_to_value * node)
+{
+  int idin;
+  if(node->type == D_BTM_INSN){
+    idin= INSN_UID(node->current_insn);
+    return idin;
+  }
+  return 5;// calcOpernadId(node);
 }
 /*
 return true if the insn marked as visited
@@ -916,11 +927,9 @@ return false if the insn did not marked as visited
 static bool
 OperandIsVisited(insns_to_value * node)
 {
-  int currentOpId;
-  currentOpId=calcOpernadId(node);
   if (g_list_visited_insns.empty())
      return false;
-  g_list_visited_insns_it = std::find(g_list_visited_insns.begin(), g_list_visited_insns.end(), currentOpId);
+  g_list_visited_insns_it = std::find(g_list_visited_insns.begin(), g_list_visited_insns.end(), node->id);
   if (g_list_visited_insns_it == g_list_visited_insns.end())
     return false;
   return true;
@@ -930,10 +939,8 @@ OperandIsVisited(insns_to_value * node)
 static void
 markOperandAsVisited(insns_to_value * node){
 
-int exprId=calcOpernadId(node);
-
 if(!OperandIsVisited(node))
-  g_list_visited_insns.push_back(exprId);
+  g_list_visited_insns.push_back(node->id);
 }
 
 /* mark insn as visited */
@@ -960,6 +967,7 @@ node->current_expr=expr;
 node->code=GET_CODE(expr);
 node->opernadNum=opernadNum;
 node->valid_value=false;
+node->id=calcId(node);
 
 return node;
 }
