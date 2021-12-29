@@ -896,7 +896,7 @@ InsansIsVisited(rtx_insn *curr_insn)
 static int
 calcOpernadId(insns_to_value * node){
   int exprId,insnId,exprShift=10,tempInId;
-  insns_to_value * temp = node->father;
+ insns_to_value * temp = node->father;
   insnId=temp->id;
   tempInId=insnId;
 
@@ -905,7 +905,7 @@ calcOpernadId(insns_to_value * node){
     tempInId=tempInId/10;
   }
 
-  exprId=(exprShift * node->opernadNum) + insnId; // exprId= num|unique == unique
+  exprId=(exprShift * node->opernadNum) + 11; // exprId= num|unique == unique
 
   return exprId;
 }
@@ -918,7 +918,7 @@ calcId(insns_to_value * node)
     idin= INSN_UID(node->current_insn);
     return idin;
   }
-  return 5;// calcOpernadId(node);
+  return  calcOpernadId(node);
 }
 /*
 return true if the insn marked as visited
@@ -1130,9 +1130,11 @@ findLastInsanModifiedDestReg(insns_to_value * node)
   expr=getExpr(node);
   numOfOperands=getNumberOfOperands(expr);
   /* get first src if ther no src reg it will return numOfOperands */
-  firstSrcOp=firstOperandSrc(node);
+  firstSrcOp=firstOperandSrc(node->father);
 
   /*if expr not part of loop */
+  if(node->opernadNum > firstSrcOp)
+  {
         if(!isPartOfLoop(node->current_insn)){
           findLastPredecessors(node);//<<<<<<<<<<<<<<<<<<<<<<<<<<for test
           regInsns=findLastPredecessorsInsn(node);
@@ -1141,7 +1143,7 @@ findLastInsanModifiedDestReg(insns_to_value * node)
           regInsns=findLastDomLoopInsn(node);
 
        // srcRegsInsn = mergeInsnsListWithRegInsnList(regInsns,srcRegsInsn,source);
-      
+  }  
     
   
     return regInsns;
