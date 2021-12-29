@@ -1146,12 +1146,25 @@ return -1; /* not found*/
 
 static rtx_insn* 
 getBBLastInsn(std::list<rtx_insn*> defInsnsList){
-  int maxId;
+  int maxId,curId;
+  rtx_insn *cinsn,*result;
+  bool firstTime=true;
   std::list<rtx_insn *>::iterator defListIter;
   for(defListIter=defInsnsList.begin(); defListIter != defInsnsList.end(); ++defListIter){
-
+    cinsn= *defListIter;
+    if(firstTime){
+      maxId=DF_INSN_LUID(cinsn);
+      firstTime=false;
+    }
+    curId=DF_INSN_LUID(cinsn);
+    if(curId>maxId){
+      maxId=curId;
+      result=cinsn;
+    }
   }
+  return result;
 }
+
 static rtx_insn* 
 getBBLastInsnBeforCurrentInsn(  std::list<rtx_insn*> defInsnsList, rtx_insn *currentInsn){
 
