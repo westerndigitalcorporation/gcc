@@ -1120,29 +1120,61 @@ mergeInsnsListWithRegInsnList(std::list <rtx *> insnList, std::list <std::pair<r
 
 
 }
+/* get pred closest BB index that contains Use-defs insns*/
+static int 
+getClosestBBwithUseDef(std::map<int,std::list<rtx_insn*>> defsToBBmap,std::list<int> predsBBindex){
+std::map<int,std::list<rtx_insn*>>::iterator theMapIt;
+int bbId;
 
+  while(!predsBBindex.empty()){
+
+    bbId=predsBBindex.front();
+
+    if(keyExistInMap(defsToBBmap,bbId))
+    {
+      theMapIt=defsToBBmap.find(bbId);
+      if(!(theMapIt->second).empty())
+        return bbId;
+
+    }
+
+    predsBBindex.pop_front();
+    
+  }
+return -1; /* not found*/ 
+}
 static std::list < rtx * > 
 findLastInsanModifiedDestReg(insns_to_value * node)
 {
  // std::list <std::pair<rtx* , rtx* >> srcRegsInsn;/* insns from all the src regs*/
   std::list < rtx* > regInsns;/* for single source reg*/
   std::map<int,std::list<rtx_insn*>> defsToBBmap;
+  std::list<int> predsBBindex;
 
-  int numOfOperands, i, firstSrcOp;
+
+  int numOfOperands, i, firstSrcOp,wantedBB;
   rtx expr, source;
   rtx_code code;
+  basic_block currentBB;
+  int predBBindex;
   /* get expr and expr operands number*/
   expr=getExpr(node);
   numOfOperands=getNumberOfOperands(expr);
   /* get first src if ther no src reg it will return numOfOperands */
   firstSrcOp=firstOperandSrc(node->father);
+  currentBB=BLOCK_FOR_INSN(node->current_insn);
 
   /*if expr not part of loop */
   if(node->opernadNum > firstSrcOp)
   {
         if(!isPartOfLoop(node->current_insn)){
           defsToBBmap=getDefsPerBasicBlock(node);
-          regInsns=findLastPredecessorsInsn(node);
+          /* get sorted list with current/pred BBs*/
+          predsBBindex=get_bb_preds(currentBB);
+          wantedBB=getClosestBBwithUseDef(defsToBBmap,predsBBindex);
+
+
+          //regInsns=findLastPredecessorsInsn(node);
         }
         else
           regInsns=findLastDomLoopInsn(node);
