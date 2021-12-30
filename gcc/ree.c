@@ -1096,9 +1096,9 @@ getDefsPerBasicBlock(insns_to_value * node)
 }
 
 
-static std::list <rtx*>
+static std::list <rtx_insn *>
 findLastDomLoopInsn(insns_to_value * node){
-  std::list <rtx *> s;
+  std::list <rtx_insn *> s;
   //<<<<<<<<<<<<<<<<<<<<----------------continue
   return s;
 }
@@ -1150,24 +1150,52 @@ getBBLastInsn(std::list<rtx_insn*> defInsnsList){
   rtx_insn *cinsn,*result;
   bool firstTime=true;
   std::list<rtx_insn *>::iterator defListIter;
-  for(defListIter=defInsnsList.begin(); defListIter != defInsnsList.end(); ++defListIter){
+
+  for(defListIter=defInsnsList.begin(); defListIter != defInsnsList.end(); ++defListIter)
+  {
     cinsn= *defListIter;
+
     if(firstTime){
       maxId=DF_INSN_LUID(cinsn);
       firstTime=false;
     }
+
     curId=DF_INSN_LUID(cinsn);
     if(curId>maxId){
       maxId=curId;
       result=cinsn;
     }
+
   }
   return result;
 }
 
 static rtx_insn* 
 getBBLastInsnBeforCurrentInsn(  std::list<rtx_insn*> defInsnsList, rtx_insn *currentInsn){
+    int maxId, curId, mainInsnId;
+  rtx_insn *cinsn,*result;
+  bool firstTime=true;
+  std::list<rtx_insn *>::iterator defListIter;
 
+  mainInsnId = DF_INSN_LUID(currentInsn);
+
+  for(defListIter=defInsnsList.begin(); defListIter != defInsnsList.end(); ++defListIter)
+  {
+    cinsn= *defListIter;
+
+    if(firstTime){
+      maxId=DF_INSN_LUID(cinsn);
+      firstTime=false;
+    }
+
+    curId=DF_INSN_LUID(cinsn);
+    if((curId>maxId)&&(curId<mainInsnId)){
+      maxId=curId;
+      result=cinsn;
+    }
+
+  }
+  return result;
 }
 static rtx_insn* 
 getBBLastInsanModifiedDestReg(int WantedBBindex, std::list<rtx_insn*> defInsnsList, rtx_insn *currentInsn){
@@ -1182,11 +1210,26 @@ getBBLastInsanModifiedDestReg(int WantedBBindex, std::list<rtx_insn*> defInsnsLi
 
 }
 
-static std::list < rtx * > 
+
+/*return true if there code_label between two insns*/
+static bool ThereCodeLabelBetweenInsns(rtx_insn *first, rtx_insn *second){
+
+  //<<<<<<<<<<<<<----need implementation <----------continue
+
+return false;
+}
+static std::list < rtx_insn * > 
+getInsnsBetweenLabels(insns_to_value *node, rtx_insn *resultInsn){
+   std::list < rtx_insn* > regInsns;
+   return   regInsns;
+}
+
+
+static std::list < rtx_insn * > 
 findLastInsanModifiedDestReg(insns_to_value * node)
 {
  // std::list <std::pair<rtx* , rtx* >> srcRegsInsn;/* insns from all the src regs*/
-  std::list < rtx* > regInsns;/* for single source reg*/
+  std::list < rtx_insn* > regInsns;/* for single source reg*/
   std::map<int,std::list<rtx_insn*>> defsToBBmap;
   std::map<int,std::list<rtx_insn*>>::iterator defsToBBmapIter;
 
@@ -1220,8 +1263,39 @@ findLastInsanModifiedDestReg(insns_to_value * node)
           defsToBBmapIter = defsToBBmap.find(wantedBBindex);
           /* the wanted insn*/
           resultInsn=getBBLastInsanModifiedDestReg(wantedBBindex, defsToBBmapIter->second, currentInsn);
+          if(ThereCodeLabelBetweenInsns(resultInsn,currentInsn)){
+            /*TODO: if there code label bettwen resultinsns and current insn means that current insn can take its value
+            from other insn if there  code label bettwen resultinsn and here SRCs (THE SAME RECURSIVE PROBLEM) 
 
-          //regInsns=findLastPredecessorsInsn(node);
+            reginsn=push wanted use def insn and insert them with label get max to same father
+            example
+            x=0;
+            if(foo()){
+              x=x+y; <--wanted
+            }
+            else
+            {
+              if(boo){
+                 x=x+11 <--wanted
+              }
+              else
+              {
+                x=x*3; <--wanted
+              }
+              x++; <--previnsn, wanted
+            }
+            zeroextend(x)<--curent insn
+
+
+             */
+          regInsns=getInsnsBetweenLabels(node,resultInsn);
+
+
+          }
+          else{
+
+            regInsns.push_back(resultInsn);
+          }
         }
         else
           regInsns=findLastDomLoopInsn(node);
@@ -1268,8 +1342,8 @@ if the insn have more than one opernad (i.e not (constant or REG)) push  the ope
 static bool 
 calcValue(insns_to_value* node,std::stack<insns_to_value*> &stack){
   int value;
-   std::list <rtx* > lastInsnM;
-   std::list <rtx*>::iterator itlastInsnM;
+   std::list <rtx_insn* > lastInsnM;
+   std::list <rtx_insn*>::iterator itlastInsnM;
    //std::pair<rtx*, rtx*> regInsnPair;
 
   bool visited;
