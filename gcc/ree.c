@@ -977,6 +977,7 @@ getTypeSizeOnBits(machine_mode mode)
 {
   /* SEE https://gcc.gnu.org/onlinedocs/gccint/Machine-Modes.html*/
   /* we supports only integer instructions up to 64'bit */
+  /*maybe we can use TYPE_MAX_VALUE/TYPE_SIZE/TYPE_PRECISION */
  switch (mode)
     {
       /* bit */
@@ -1010,10 +1011,11 @@ calcMaxValue(insns_to_value* node)
     //GET_MODE(XEXP(single_set(curr_insn),0))
     expr = getExpr(node);
   if(expr !=NULL_RTX){
- // machine_mode mode=GET_MODE(SET_DEST(XEXP(expr,0)));//<<<<<<<<<<<<<<<<<bug
-   //return  getTypeSizeOnBits(mode);
-    return 5;
+ machine_mode mode=GET_MODE(expr);
+   return  getTypeSizeOnBits(mode);
+   // return 5;
   }
+
   return -1;
   /*.... change struct? */
    //  <------------------------------
@@ -1157,6 +1159,7 @@ getBBLastInsn(std::list<rtx_insn*> defInsnsList){
 
     if(firstTime){
       maxId=DF_INSN_LUID(cinsn);
+      result=cinsn;
       firstTime=false;
     }
 
@@ -1185,6 +1188,7 @@ getBBLastInsnBeforCurrentInsn(  std::list<rtx_insn*> defInsnsList, rtx_insn *cur
 
     if(firstTime){
       maxId=DF_INSN_LUID(cinsn);
+      result=cinsn;
       firstTime=false;
     }
 
@@ -1262,6 +1266,8 @@ findLastInsanModifiedDestReg(insns_to_value * node)
           /* to get closest BB use-def insns list*/
           defsToBBmapIter = defsToBBmap.find(wantedBBindex);
           /* the wanted insn*/
+          if(wantedBBindex == -1)
+             return regInsns;
           resultInsn=getBBLastInsanModifiedDestReg(wantedBBindex, defsToBBmapIter->second, currentInsn);
           if(ThereCodeLabelBetweenInsns(resultInsn,currentInsn)){
             /*TODO: if there code label bettwen resultinsns and current insn means that current insn can take its value
@@ -1307,6 +1313,38 @@ findLastInsanModifiedDestReg(insns_to_value * node)
     return regInsns;
    
 }
+static bool
+isCalculable(insns_to_value * node){
+
+  switch(node->code){
+     case MEM:
+     case CALL_INSN:
+     case CALL:
+
+    /* in Case of MEM,CALL_INSN insn we don't want to continue and we will put maxValue*/
+     /* some cases of MEM OP we can optimize but currently we do not support MEM*/
+
+      return false;
+    default:
+      return true;
+  }
+}
+
+static bool 
+isSrcOperand(insns_to_value * node, int opNum){
+
+  
+  if((!isCalculable(node))||(opNum<firstOperandSrc(node)))
+    return false;
+  
+  switch(node->code){
+
+  default:
+    return true;
+    
+  }
+
+}
 
 static insns_to_value *
 pushInsnToStack(rtx_insn * currentInsn,insns_to_value * father,rtx curr_expr,int opNum,int type, std::stack<insns_to_value*> &stack){
@@ -1325,13 +1363,33 @@ pushOperandsToStack(insns_to_value * currentNode, std::stack<insns_to_value*> &s
     expr=getExpr(currentNode);
     numOfOperands=getNumberOfOperands(expr);
 
-   for(i=0; i<numOfOperands; i++){
+   for(i=0; i<numOfOperands; i++){ 
     rtx subExpr=XEXP(expr, i);/* to have different  memory locations*/ /***** i need to change it to malloc after that when we exit the block maybe the memory removed*/
-    node=pushInsnToStack(currentNode->current_insn, currentNode, subExpr, i+1, D_BTM_EXPR, stack);
+    if(isSrcOperand(currentNode,i))
+      node=pushInsnToStack(currentNode->current_insn, currentNode, subExpr, i+1, D_BTM_EXPR, stack);
 
    }
    
 }
+
+static int
+calcArithmetic(insns_to_value* node){
+  std::list<int>::iterator opvlistIter;
+  int value;
+//operands_value
+  switch(node->code){
+    case ZERO_EXTEND:
+    case SET:
+      opvlistIter = node->operands_value.begin();
+      ++opvlistIter;
+      value = *opvlistIter;
+      return value;
+
+
+  }
+
+}
+
 
 /*if the insn in the node visited means the insn operands value is valid so in that case the function will calculate the current insn value 
 Note: each operand is insn
@@ -1342,10 +1400,11 @@ if the insn have more than one opernad (i.e not (constant or REG)) push  the ope
 static bool 
 calcValue(insns_to_value* node,std::stack<insns_to_value*> &stack){
   int value;
-   std::list <rtx_insn* > lastInsnM;
-   std::list <rtx_insn*>::iterator itlastInsnM;
+  std::list <rtx_insn* > lastInsnM;
+  std::list <rtx_insn*>::iterator itlastInsnM;
+  rtx_insn* newInsn;
    //std::pair<rtx*, rtx*> regInsnPair;
-
+  
   bool visited;
   if(node->type == D_BTM_INSN)
     visited=InsansIsVisited(node->current_insn);
@@ -1381,17 +1440,22 @@ calcValue(insns_to_value* node,std::stack<insns_to_value*> &stack){
     {
       /* reaching non constant insn twice means that we cannot calculate it as constant value. 
        so we calculate the maximum value that the insn can reach depend to on type */
-       value = calcMaxValue(node);
-       if(stack.size()==1)
-      {
-        node->value = value;
-        node->valid_value=true;
-      }
-      else
-      {
-        /* push value to father list */
-        node->father->operands_value.push_back(value);
-      }
+      if(node->code == REG){
+      value = calcMaxValue(node);
+         if(stack.size()==1)
+        {
+          node->value = value;
+          node->valid_value=true;
+        }
+        else
+        {
+          /* push value to father list */
+          node->father->operands_value.push_back(value);
+        }
+    }
+    else{
+     value = calcArithmetic(node);
+    }
 
     }
     return true;
@@ -1406,14 +1470,18 @@ calcValue(insns_to_value* node,std::stack<insns_to_value*> &stack){
          Note: also if the last insn is PHI its ok becouse we push the both PHI operands */
         if(node->code == REG){
           lastInsnM = findLastInsanModifiedDestReg(node);
-          //=======>>>>>>>>>>>>>>>> NEED WORK
-          // for(itlastInsnM=lastInsnM.begin(); itlastInsnM != lastInsnM.end(); ++itlastInsnM){
-          //   regInsnPair= *itlastInsnM;
-          //   pInsn=regInsnPair.second;
-          //   //pushInsnToStack(rtx_insn * currentInsn,insns_to_value * father,rtx curr_expr,int opNum,int type, std::stack<insns_to_value*> &stack){
-          //   cNode=pushInsnToStack(node->current_insn,node,*pInsn, 0, D_BTM_INSN, stack);
-          //   pushOperandsToStack(cNode , stack);
-          // }
+        
+           for(itlastInsnM=lastInsnM.begin(); itlastInsnM != lastInsnM.end(); ++itlastInsnM){
+            newInsn = *itlastInsnM;
+            //pushInsnToStack(rtx_insn * currentInsn,insns_to_value * father,rtx curr_expr,int opNum,int type, std::stack<insns_to_value*> &stack){
+          if(newInsn!=NULL_RTX){
+            expr=single_set(newInsn);
+
+            cNode = pushInsnToStack(newInsn, node, expr, 0, D_BTM_INSN, stack);
+            pushOperandsToStack(cNode , stack);
+            }
+          
+           }
 
         }
       }
