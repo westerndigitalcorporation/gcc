@@ -241,6 +241,8 @@ along with GCC; see the file COPYING3.  If not see
 
 #pragma GCC poison malloc
 
+#define MAX_INT 2147483647
+
 #define D_BTM_INSN 0
 #define D_BTM_EXPR 1
 #define RTX_INSN_NULL (rtx_insn*)0
@@ -552,7 +554,7 @@ get_defs (rtx_insn *insn, rtx reg, vec<rtx_insn *> *dest)
    But we can't do anything with that in this pass so proceed only
    if the instruction really sets REG in a way that can be deduced
    from the RTL structure.  */
-      if (global_regs[REGNO (reg)]
+    if (global_regs[REGNO (reg)]
     && !set_of (reg, DF_REF_INSN (ref_link->ref)))
   return NULL;
     }
@@ -801,6 +803,9 @@ merge_def_and_ext (ext_cand *cand, rtx_insn *def_insn, ext_state *state)
 
   return false;
 }
+
+static rtx_insn* getBBLastInsanModifiedDestReg(int WantedBBindex, std::list<rtx_insn*> defInsnsList, rtx_insn *currentInsn, insns_to_value * node);
+
 /* get index of first src operand for RTX_EXTRA class  */
 static int
 firstOperandSrcForRTX_EXTRA(insns_to_value *node){
@@ -823,7 +828,7 @@ firstOperandSrc(insns_to_value * node){
       //if((GET_RTX_CLASS (node->code) == RTX_CONST_OBJ)){
   switch(GET_RTX_CLASS (node->code)){
     case RTX_COMM_ARITH:
-      return 1;
+      return 0;
     case     RTX_UNARY:
     case RTX_BIN_ARITH:
     case   RTX_AUTOINC:
@@ -996,6 +1001,8 @@ getTypeSizeOnBits(machine_mode mode)
         return 32;
       /*Double Intege / partial Double Intege */
       //case PDImode:
+
+        /* NOTE : we currently supports only 32'bit*/
       case DImode:
         return 64;
 
@@ -1174,11 +1181,16 @@ getBBLastInsn(std::list<rtx_insn*> defInsnsList){
 }
 
 static rtx_insn* 
-getBBLastInsnBeforCurrentInsn(  std::list<rtx_insn*> defInsnsList, rtx_insn *currentInsn){
-    int maxId, curId, mainInsnId;
+getBBLastInsnBeforCurrentInsn(  std::list<rtx_insn*> defInsnsList, rtx_insn *currentInsn, insns_to_value * node){
+    int maxId, curId, mainInsnId, wantedBBindex;
   rtx_insn *cinsn,*result;
   bool firstTime=true;
   std::list<rtx_insn *>::iterator defListIter;
+  std::list<int> predsBBindex;
+  std::map<int,std::list<rtx_insn*>> defsToBBmap;
+  std::map<int,std::list<rtx_insn*>>::iterator defsToBBmapIter;
+
+
 
   mainInsnId = DF_INSN_LUID(currentInsn);
 
@@ -1187,10 +1199,48 @@ getBBLastInsnBeforCurrentInsn(  std::list<rtx_insn*> defInsnsList, rtx_insn *cur
     cinsn= *defListIter;
 
     if(firstTime){
-      maxId=DF_INSN_LUID(cinsn);
-      result=cinsn;
+      do
+      {
+        if((defListIter != defInsnsList.end())){
+          maxId=DF_INSN_LUID(cinsn);
+          result=cinsn;
+         }
+ 
+         if((defListIter == defInsnsList.end())&&(maxId >=  mainInsnId))
+          { 
+            defsToBBmap=getDefsPerBasicBlock(node);
+                 /* get sorted list with current/pred BBs*/
+            predsBBindex=get_bb_preds(BLOCK_FOR_INSN(currentInsn));
+            predsBBindex.pop_front();
+            /* get closest BB with index*/
+            wantedBBindex=getClosestBBwithUseDef(defsToBBmap,predsBBindex);
+            /* to get closest BB use-def insns list*/
+            defsToBBmapIter = defsToBBmap.find(wantedBBindex);
+            /* the wanted insn*/
+            if(wantedBBindex == -1)
+               return NULL;
+            /* actully it will call getBBLastInsn wanted!=current*/
+            result=getBBLastInsn(defsToBBmapIter->second);//getBBLastInsanModifiedDestReg(wantedBBindex, defsToBBmapIter->second, currentInsn,node);
+
+            return result;
+
+          }
+          else
+          {
+            if(defListIter ==  defInsnsList.end())
+               return result;
+          }
+         ++defListIter;
+
+         cinsn= *defListIter;
+     
+
+      }while((maxId >= mainInsnId));
+
       firstTime=false;
     }
+    if(defListIter ==  defInsnsList.end())
+      return result;
 
     curId=DF_INSN_LUID(cinsn);
     if((curId>maxId)&&(curId<mainInsnId)){
@@ -1199,10 +1249,11 @@ getBBLastInsnBeforCurrentInsn(  std::list<rtx_insn*> defInsnsList, rtx_insn *cur
     }
 
   }
+ 
   return result;
 }
 static rtx_insn* 
-getBBLastInsanModifiedDestReg(int WantedBBindex, std::list<rtx_insn*> defInsnsList, rtx_insn *currentInsn){
+getBBLastInsanModifiedDestReg(int WantedBBindex, std::list<rtx_insn*> defInsnsList, rtx_insn *currentInsn, insns_to_value * node){
   basic_block currentInsnBB, defBb;
  
   currentInsnBB=BLOCK_FOR_INSN(currentInsn);
@@ -1210,7 +1261,7 @@ getBBLastInsanModifiedDestReg(int WantedBBindex, std::list<rtx_insn*> defInsnsLi
     if(WantedBBindex != currentInsnBB->index)
       return getBBLastInsn(defInsnsList);
     else
-      return getBBLastInsnBeforCurrentInsn(defInsnsList,currentInsn);
+      return getBBLastInsnBeforCurrentInsn(defInsnsList, currentInsn, node);
 
 }
 
@@ -1268,7 +1319,10 @@ findLastInsanModifiedDestReg(insns_to_value * node)
           /* the wanted insn*/
           if(wantedBBindex == -1)
              return regInsns;
-          resultInsn=getBBLastInsanModifiedDestReg(wantedBBindex, defsToBBmapIter->second, currentInsn);
+          resultInsn=getBBLastInsanModifiedDestReg(wantedBBindex, defsToBBmapIter->second, currentInsn, node);
+          if(resultInsn == NULL)
+             return regInsns;
+
           if(ThereCodeLabelBetweenInsns(resultInsn,currentInsn)){
             /*TODO: if there code label bettwen resultinsns and current insn means that current insn can take its value
             from other insn if there  code label bettwen resultinsn and here SRCs (THE SAME RECURSIVE PROBLEM) 
@@ -1371,19 +1425,50 @@ pushOperandsToStack(insns_to_value * currentNode, std::stack<insns_to_value*> &s
    }
    
 }
+/* update current node value and push the value to father list*/
+static void 
+updateNodesValue(insns_to_value* node, long long int value ){
+  int intValue;
+  if(value>MAX_INT)
+    intValue=MAX_INT;
+  else
+    intValue=value;
 
-static int
+  node->value=value;
+  if(node->father != NULL)
+    node->father->operands_value.push_back(value);
+}
+
+static long long int
 calcArithmetic(insns_to_value* node){
   std::list<int>::iterator opvlistIter;
-  int value;
+  long long int value=0;
+  int i;
 //operands_value
   switch(node->code){
     case ZERO_EXTEND:
     case SET:
       opvlistIter = node->operands_value.begin();
-      ++opvlistIter;
       value = *opvlistIter;
+      updateNodesValue(node, value);
       return value;
+
+    case PLUS:
+      for(opvlistIter = node->operands_value.begin(); opvlistIter != node->operands_value.begin(); ++opvlistIter ){
+        value=value + *opvlistIter;
+      }
+      updateNodesValue(node, value);
+      return value;
+
+    case NEG:
+      opvlistIter = node->operands_value.begin();
+      value =  - *opvlistIter;
+      updateNodesValue(node, value );
+      return value;
+
+
+
+
 
 
   }
@@ -1476,8 +1561,9 @@ calcValue(insns_to_value* node,std::stack<insns_to_value*> &stack){
             //pushInsnToStack(rtx_insn * currentInsn,insns_to_value * father,rtx curr_expr,int opNum,int type, std::stack<insns_to_value*> &stack){
           if(newInsn!=NULL_RTX){
             expr=single_set(newInsn);
-
+            markInsnsAsVisited(newInsn);
             cNode = pushInsnToStack(newInsn, node, expr, 0, D_BTM_INSN, stack);
+
             pushOperandsToStack(cNode , stack);
             }
           
