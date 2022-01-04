@@ -1448,6 +1448,8 @@ calcArithmetic(insns_to_value* node){
   switch(node->code){
     case ZERO_EXTEND:
     case SET:
+    case REG:
+    case SUBREG:
       opvlistIter = node->operands_value.begin();
       value = *opvlistIter;
       updateNodesValue(node, value);
@@ -1507,11 +1509,11 @@ calcValue(insns_to_value* node,std::stack<insns_to_value*> &stack){
       expr=getExpr(node);
       value= XINT(expr, 0);/* get operand as int */
 
+        node->value = value;
       /* if it's the first insn */
       if(stack.size()==1)
       {
-        node->value = value;
-        node->valid_value=true;
+         node->valid_value=true;
       }
       else
       {
@@ -1525,8 +1527,8 @@ calcValue(insns_to_value* node,std::stack<insns_to_value*> &stack){
     {
       /* reaching non constant insn twice means that we cannot calculate it as constant value. 
        so we calculate the maximum value that the insn can reach depend to on type */
-      if(node->code == REG){
-      value = calcMaxValue(node);
+      if((node->code == REG)&&(node->operands_value.empty())){
+      value = calcMaxValue(node); 
          if(stack.size()==1)
         {
           node->value = value;
