@@ -1443,31 +1443,108 @@ static long long int
 calcArithmetic(insns_to_value* node){
   std::list<int>::iterator opvlistIter;
   long long int value=0;
-  int i;
+  int i,x,y;
+  switch(node->code){
+        case MINUS:
+        case DIV:
+        case MOD:
+        case AND :
+        case IOR:
+        case XOR:
+        case ASHIFT:
+        case ASHIFTRT:
+        case LSHIFTRT:
+          x = * (node->operands_value.begin());
+          y = * (++node->operands_value.begin());
+          break;
+        default:
+          opvlistIter = node->operands_value.begin();
+
+  }
 //operands_value
   switch(node->code){
     case ZERO_EXTEND:
     case SET:
     case REG:
     case SUBREG:
-      opvlistIter = node->operands_value.begin();
-      value = *opvlistIter;
+    case SIGN_EXTEND:
+    case TRUNCATE:
+       value = *opvlistIter;
       updateNodesValue(node, value);
       return value;
 
     case PLUS:
       for(opvlistIter = node->operands_value.begin(); opvlistIter != node->operands_value.begin(); ++opvlistIter ){
         value=value + *opvlistIter;
-      }
+       }
+        updateNodesValue(node, value);
+        return value;
+
+    case MINUS:
+      value =x-y;
       updateNodesValue(node, value);
       return value;
 
+    case MULT:
+      for(opvlistIter = node->operands_value.begin(); opvlistIter != node->operands_value.begin(); ++opvlistIter ){
+        value = value * (*opvlistIter);
+       }
+        updateNodesValue(node, value);
+        return value;
+      /*
+      add case SS_MULT ,US_MULT ,SS_DIV ,US_DIV , UDIV , UMOD ,ROTATE,ROTATERT,LSHIFTRT,smin,smax,umin,umax*/
+    case DIV:
+      value =x/y;
+      updateNodesValue(node, value);
+      return value;
+
+    case MOD:
+      value =x%y;
+      updateNodesValue(node, value);
+      return value;
+
+    case AND :
+      value =x&y;
+      updateNodesValue(node, value);
+      return value;
+
+    case IOR:
+      value =x|y;
+      updateNodesValue(node, value);
+      return value;
+
+    case XOR:
+      value =x ^ y;
+      updateNodesValue(node, value);
+      return value;
+
+    case NOT:
+      value = ~(*opvlistIter);
+      updateNodesValue(node, value);
+      return value;
+
+
     case NEG:
-      opvlistIter = node->operands_value.begin();
-      value =  - *opvlistIter;
+      value =  - (*opvlistIter);
       updateNodesValue(node, value );
       return value;
 
+    case ASHIFT:
+      value = x << y;
+      updateNodesValue(node, value );
+      return value;
+
+    case LSHIFTRT:
+      value = x >> y;
+      updateNodesValue(node, value );
+      return value;
+
+    case ASHIFTRT:
+      value = x >> y;
+      if ((x < 0 ) && (y > 0))
+        value = ( x >> y | ~(~0U >> y));//x>>y | 0xffff>>y
+     updateNodesValue(node, value );
+     return value;
 
 
 
