@@ -214,6 +214,80 @@ along with GCC; see the file COPYING3.  If not see
    run time) on EEMBC 2.0 benchmarks on Atom processor with geomean performance
    gain 1%.  */
 
+/*
+patch main function : insn_is_reachable_and_removable
+authour : Ibrahim Qashqoush
+ 
+
+
+
+
+
+
+Problem Description :
+  --------------------
+This patch removing redundant extensions instructions by calculating the instruction
+value if the value is reachable, or the maximum value that the instruction can get if
+the instruction value is not reachable, and checking if the (value) or (maximum value)
+is less than maximum value that the un-extended REG mode can reach
+For example:
+(insn 53 52 54 (set (reg: QI 15 a5 [91])
+   (const_int 1 [0x1]))  
+(nil))
+(insn 54 53 55 (set (reg:SI 15 a5 [orig:80 _9 ] [80])
+   (zero_extend:SI (reg:QI 15 a5 [91])))
+  (nil))
+
+
+QI Mode maximum value ~ 127 (the unextended REG)
+Reg a5[91] value=1
+The second insn is removable due to 1<127 
+
+How does this patch work?
+--------------------------
+Phase1:
+We found all IF_THEN_ELSE instructions on the current function and build a map From 
+IF_THEN_ELSE Exit basic block index to IF_THEN_ELSE node. where Exit basic block is the
+basic block that will be executed after the IF_THEN_ELSE, and the IF_THEN_ELSE node
+contains IF/ELSE basic blocks index
+
+If(condition)
+{
+//code
+<--If basic block
+}
+Else
+{
+//code
+<--else basic block
+
+}
+<-- IF_THEN_ELSE Exit basic block
+
+
+Phase1 Limitations:
+We currently don’t support :
+1.Nested IF_THEN_ELSE and we cannot calculate all the IF_THEN_ELSE Exit basic block if we have Nested IF_THEN_ELSE 
+
+Phase2:
+-------
+Calculating the expressions(instruction) value OR max value  
+We calculate the value of the expression by recursively calculating the 
+expression sub-expressions (Src operands) and simulating the expression code.
+If the sub-expression is constant the sub-expression value will be the constant value.
+If the sub-expression is Src REG for the current expression find all last dependency 
+instructions calculate their value and update the src REG value as the maximum value 
+of all the last dependency Instructions.
+If at least one subexpression is not supported like call instruction or MEM,
+or if we have nested IF_THEN_ELSE, or if We have a negative sub-expression or more than one IF_THEN_ELSE in the function,
+calculate the maximum value that the expression value can reach.
+Where the maximum value of sub-expression is the maximum value that can fit in the expression(father) Destination REG 
+Phase3:
+Removing extensions instructions
+If the extended expression  value less than the extended expression destination value remove the extensions instructions
+
+
+*/
 
 #include "config.h"
 #include "system.h"
