@@ -239,15 +239,50 @@ along with GCC; see the file COPYING3.  If not see
 #include <stack>
 #include <pthread.h>
 
-#pragma GCC poison malloc
+
 
 #define MAX_INT 2147483647
 
 #define D_BTM_INSN 0
 #define D_BTM_EXPR 1
 #define RTX_INSN_NULL (rtx_insn*)0
-/* This structure represents a candidate for elimination.  */
+#define HAS_NESTED_IF 1
+#define HAS_NESTED_ELSE 10
+#define HAS_NESTED_IF_ELSE 11
 
+/* The main struct (insns_to_value)
+  the struct represent insn/subinsn info 
+  type :
+    we have two types:.
+      D_BTM_INSN : if the node represent insn (rtx_insn)
+      D_BTM_EXPR : if the node represent operand(sub insn) (rtx)
+  father :
+    if the node is insn here father could be :
+      * Null if it the first insn (the insn that we want to calculate its value).
+      * REG operand if the insn is could be the last insn that modife the REG value.
+    if the Node is oprand here father could be
+      * insn if it the insn operand
+      * operand if it sub sub insns (operand operand).
+  current_insn : 
+    the insn that the Node represent.
+  operands_value:
+    hold sons value
+  code:
+    current insn code i.e REG,PLUS,CONST..
+  value:
+    current insn value
+  operandNum:
+    used to calculate the id start from 1, 
+    if current node is insn operanNum value will be 0
+  id:
+    unique id to verify if we visted this insn before.
+  valid_value :
+    true if the value is valid 
+  is_supported:
+    true if we support the insn
+
+
+  */
 struct insns_to_value
 {
   /* The instruction */
@@ -261,14 +296,175 @@ struct insns_to_value
   int opernadNum;
   int id;
   bool valid_value;
+  bool is_supported;
 };
 
+
+struct if_then_else_node
+{
+  /* IF_THEN_ELSE_NODE that the node is represinting */
+  rtx_insn* insn;
+
+  /* condition=true Basic Block index */
+  int if_bb_index;
+
+  /* condition=false Basic Block index*/
+  int else_bb_index;
+
+  /* Next excuted BasicBlock after executing if/else Basic Blocks index*/
+  int exit_bb_index;
+
+  /* the last ELSE basic block in case we have nested IF_then_else on The ELSE index*/
+  int else_end_bb_index;
+
+  /* the last IF basic block in case we have nested IF_then_else on The IF index*/
+  int if_end_bb_index;
+
+  /* unique id (insn id)*/
+  int id;
+
+  /* if there nested IF_THEN_ELSE*/
+  bool hasNested;
+
+  /* we done calculating node data*/
+  bool isValid;
+};
+
+/* we didn't support yet two if then else that write to the same REG 
+  and all the basic blocks bettwen the two if then else have no insn that write to REG also we not support nested
+  if then else yet so on that case we will return max/min value range   */
+bool functionHaveMoreThanOneIfThenElse;
+
+/* IF_THEN_ELSE EXIT BasicBlock to IF and ELSE Basic Blocks */
+std::map<int, if_then_else_node*> ExitBBtoIfElseBBMap;
+
+/*  IF_THEN_ELSE Basic Block to IF_THEN_ELSE Node map */
+std::map<int, if_then_else_node* > bbToBranch;
+
+/* insn id to insn map */
+std::map<int,rtx_insn*> uidToInsnMap;
+
+/* Basic block index to BasicBlock map */
+std::map<int,basic_block> bbIndexToBBmap;
+
+/* visited insns list to avoid circular REG dependencies deadlock */
 std::list<int> g_list_visited_insns;    
+
 std::list<int>::iterator g_list_visited_insns_it;
-bool g_valid_data=true;
 std::list<basic_block>::iterator bb_it;
+
+/* Basic block predecessors */
 auto_vec<basic_block > bb_preds_vec;
+
+/*insn use-def chain*/
 auto_vec<rtx_insn *> insn_defs;
+
+bool hasNegativExpr;
+
+/* if_then_else_node constructor */
+static if_then_else_node *
+build_if_then_else_node(rtx_insn * ins)
+{
+ if_then_else_node *node = new  if_then_else_node;
+ node->insn=ins;
+ node->isValid=false;
+ node->id=INSN_UID(ins);
+ node-> exit_bb_index = -1;
+ node-> else_end_bb_index = -1;
+ node-> if_end_bb_index = -1;
+ node-> if_bb_index = -1;
+ node-> else_bb_index=-1;
+ return node;
+}
+
+
+/* return ExitBBtoIfElseBBMap map by reference */
+std::map<int,if_then_else_node*>& 
+GetTableExitBBtoIfElseBBMap()
+{
+  static std::map<int,if_then_else_node*> ExitBBtoIfElseBBMap;
+  return ExitBBtoIfElseBBMap;
+}
+
+/* return bbIndexToBBmap map by reference */
+std::map<int,basic_block>& 
+GetTableBB()
+{
+  static std::map<int,basic_block> bbIndexToBBmap;
+  return bbIndexToBBmap;
+}
+
+/* return uidToInsnMap map by reference */
+std::map<int,rtx_insn*>& 
+GetTableInsn()
+{
+  static std::map<int,rtx_insn*> uidToInsnMap;
+  return uidToInsnMap;
+}
+
+/* return bbToBranch map by reference */
+std::map<int,if_then_else_node*>& 
+GetTableIfElseNode()
+{
+  static std::map<int,if_then_else_node*> bbToBranch;
+  return bbToBranch;
+}
+
+/* input: insn id
+   output : insn */
+static rtx_insn*
+get_insn(int id){
+  std::map<int,rtx_insn*>& uidToInsnMap=GetTableInsn();
+  std::map<int, rtx_insn* >::iterator theMapIt;
+  theMapIt=uidToInsnMap.find(id);
+  return theMapIt->second;
+
+}
+
+/* input : basic block index 
+   output : basic block */
+static basic_block
+get_bb(int id){
+    std::map<int,basic_block>& bbIndexToBBmap= GetTableBB();
+    std::map<int, basic_block >::iterator theMapIt;
+    theMapIt=bbIndexToBBmap.find(id);
+    if(theMapIt==bbIndexToBBmap.end())
+      return NULL;
+    return theMapIt->second;
+}
+
+/* sorted list of curent and  predecessors basic blocks
+  input : Basic block (current)
+  output: sorted list containing current Basic block index and her predecessors basic blocks index */
+static std::list<int> 
+get_bb_preds(basic_block bb ){
+  std::list<int>bb_preds_list;
+  std::list<int>::iterator visited_bb_it;
+
+  if(bb==NULL)
+    return bb_preds_list;
+
+/* push current basic block index to the list */
+ bb_preds_list.push_back(bb->index);
+
+  while(bb->prev_bb!= NULL){
+
+    /* if the basic block is visited return the list */
+    visited_bb_it= std::find(bb_preds_list.begin(), bb_preds_list.end(), bb->prev_bb->index);
+    if (visited_bb_it != bb_preds_list.end())
+      return bb_preds_list;
+
+
+    /* if the basic block not visted push it to list */
+    bb_preds_list.push_back(bb->prev_bb->index);
+    bb=bb->prev_bb;
+  }
+
+  return bb_preds_list;
+}
+
+
+/* This structure represents a candidate for elimination.  */
 struct ext_cand
 {
   /* The expression.  */
@@ -291,32 +487,7 @@ static int max_insn_uid;
 
 
 
-/* sorted list of curent and  preds BBs*/
-static std::list<int> 
-get_bb_preds(basic_block bb ){
-  std::list<int>bb_preds_list;
-  std::list<int>::iterator visited_bb_it;
 
-  if(bb==NULL)
-    return bb_preds_list;
-
- bb_preds_list.push_back(bb->index);
-
-  while(bb->prev_bb!= NULL){
-
-    /* check if BB visited if visited return the list*/
-    visited_bb_it= std::find(bb_preds_list.begin(), bb_preds_list.end(), bb->prev_bb->index);
-    if (visited_bb_it != bb_preds_list.end())
-        return bb_preds_list;
-
-
-    /*if not visted push it to list*/
-    bb_preds_list.push_back(bb->prev_bb->index);
-    bb=bb->prev_bb;
-  }
-
-  return bb_preds_list;
-}
 
 /* Update or remove REG_EQUAL or REG_EQUIV notes for INSN.  */
 
@@ -804,44 +975,31 @@ merge_def_and_ext (ext_cand *cand, rtx_insn *def_insn, ext_state *state)
   return false;
 }
 
-static rtx_insn* getBBLastInsanModifiedDestReg(int WantedBBindex, std::list<rtx_insn*> defInsnsList, rtx_insn *currentInsn, insns_to_value * node);
+static rtx_insn* getBBLastInsanModifiedDestReg(int lastDependBBindex, std::list<rtx_insn*> defInsnsList, rtx_insn *currentInsn, insns_to_value * node);
 
 /* get index of first src operand for RTX_EXTRA class  */
 static int
 firstOperandSrcForRTX_EXTRA(insns_to_value *node){
 
-  switch(node->code){
-    case SET:
-      return 1;
-    case SUBREG:
-      return 0;
-    default:
-      return 1;
-
-
-  }
+  if(node->code == SUBREG)
+    return 0;
+  return 1;
 }
 
 /* get index of first src operand*/
 static int
 firstOperandSrc(insns_to_value * node){
-      //if((GET_RTX_CLASS (node->code) == RTX_CONST_OBJ)){
-  switch(GET_RTX_CLASS (node->code)){
-    case RTX_COMM_ARITH:
-      return 0;
-    case     RTX_UNARY:
-    case RTX_BIN_ARITH:
-    case   RTX_AUTOINC:
-    return 0;
-    case RTX_EXTRA:
+  if(GET_RTX_CLASS (node->code) == RTX_EXTRA)
     return firstOperandSrcForRTX_EXTRA(node);
-    default:
-    return 1;
 
-  }
+  if((GET_RTX_CLASS (node->code) == RTX_COMM_ARITH)||(GET_RTX_CLASS (node->code) == RTX_UNARY)||
+    (GET_RTX_CLASS (node->code) == RTX_BIN_ARITH)||(GET_RTX_CLASS (node->code) == RTX_AUTOINC))
+    return 0;
 
+  return 1;
 
 }
+
 
 /* Given SRC, which should be one or more extensions of a REG, strip
    away the extensions and return the REG.  */
@@ -859,25 +1017,27 @@ get_extended_src_reg (rtx src)
 static int 
 getNumberOfOperands(rtx expr){
   rtx_code code=GET_CODE(expr);
-return GET_RTX_LENGTH(code);
+  return GET_RTX_LENGTH(code);
 }
 
 /* return true if insn part of loop else return false */
 static bool 
 isPartOfLoop(rtx_insn *insn)
 {
- basic_block bb=BLOCK_FOR_INSN(insn);
- if(bb->loop_father==NULL)
-  return false;
-return true;
+  basic_block bb=BLOCK_FOR_INSN(insn);
+  if(bb->loop_father==NULL)
+    return false;
+  return true;
 }
+
+/* casting current insn to rtx */
 static rtx 
 getExpr(insns_to_value * node){
-
   if(node->type == D_BTM_INSN)
     return single_set(node->current_insn);
   return node->current_expr;
 }
+
 
 /*
 return true if the insn marked as visited
@@ -888,20 +1048,26 @@ InsansIsVisited(rtx_insn *curr_insn)
 {
   int currentInsnId;
   currentInsnId=INSN_UID(curr_insn);
+
+  /* if there is no visited insns yet return false */
   if (g_list_visited_insns.empty())
      return false;
+
+  /* if current insn id dosnt exist in the list return false*/
   g_list_visited_insns_it = std::find(g_list_visited_insns.begin(), g_list_visited_insns.end(), currentInsnId);
   if (g_list_visited_insns_it == g_list_visited_insns.end())
     return false;
+
   return true;
 
 }
+ 
 
 /* return unique ID to operand */
 static int
 calcOpernadId(insns_to_value * node){
   int exprId,insnId,exprShift=10,tempInId;
- insns_to_value * fatherNode = node->father;
+  insns_to_value * fatherNode = node->father;
   insnId=fatherNode->id;
   tempInId=insnId;
 
@@ -914,6 +1080,7 @@ calcOpernadId(insns_to_value * node){
 
   return exprId;
 }
+
 /* calculate node insn/expr ID*/
 static int 
 calcId(insns_to_value * node)
@@ -925,6 +1092,7 @@ calcId(insns_to_value * node)
   }
   return  calcOpernadId(node);
 }
+
 /*
 return true if the insn marked as visited
 return false if the insn did not marked as visited
@@ -932,14 +1100,19 @@ return false if the insn did not marked as visited
 static bool
 OperandIsVisited(insns_to_value * node)
 {
+  /* if there is no visited insns yet return false */
   if (g_list_visited_insns.empty())
      return false;
+
+  /* if current insn id dosnt exist in the list return false */
   g_list_visited_insns_it = std::find(g_list_visited_insns.begin(), g_list_visited_insns.end(), node->id);
   if (g_list_visited_insns_it == g_list_visited_insns.end())
     return false;
-  return true;
 
+  return true;
 }
+
+
 /* mark operand expr as visited*/
 static void
 markOperandAsVisited(insns_to_value * node){
@@ -958,79 +1131,124 @@ markInsnsAsVisited(rtx_insn *curr_insn)
     g_list_visited_insns.push_back(currentInsnId);
 }
 
+/* insn_to_value_node constructor */
 static insns_to_value*
 build_insn_to_value_node(rtx_insn *curr_insn,rtx curr_expr,int opernadNum ,insns_to_value *father, int type)
 {
  insns_to_value *node = new  insns_to_value;//(insns_to_value *) malloc(sizeof(insns_to_value));
 rtx expr;
-node->type=type;
-node->father=father;
-node->current_expr=curr_expr;
-node->current_insn=curr_insn;
-expr=getExpr(node);
-node->current_expr=expr;
-node->code=GET_CODE(expr);
-node->opernadNum=opernadNum;
-node->valid_value=false;
-node->id=calcId(node);
+node->type = type;
+node->father = father;
+node->current_expr = curr_expr;
+node->current_insn = curr_insn;
+expr = getExpr(node);
+node->current_expr = expr;
+node->code = GET_CODE(expr);
+node->opernadNum = opernadNum;
+node->valid_value = false;
+node->is_supported = true;
+node->value = MAX_INT;
+node->id = calcId(node);
 
 return node;
 }
 
+
+/* return the source destination register*/
+static rtx 
+getDestReg(insns_to_value* node){
+  insns_to_value* father = node->father;
+  insns_to_value* result;
+  bool flag=true;
+  
+  /*get destination expression*/
+  while((father!=NULL)&&(flag)){
+    if(getNumberOfOperands(father->current_expr)>1)
+      flag=false;
+    result=father;
+    father = father->father;
+  }
+  
+  /*if destinations is exist return destination register*/
+  if(!flag)
+    return XEXP(result->current_expr,0);
+  return NULL_RTX;
+
+}
+
+
 static int 
-getTypeSizeOnBits(machine_mode mode)
+getRegMaxValue(machine_mode mode)
 {
-  /* SEE https://gcc.gnu.org/onlinedocs/gccint/Machine-Modes.html*/
-  /* we supports only integer instructions up to 64'bit */
-  /*maybe we can use TYPE_MAX_VALUE/TYPE_SIZE/TYPE_PRECISION */
+  
  switch (mode)
     {
       /* bit */
       case BImode:
         return 1;
-      /* if it partial Quarter integer or Quarter integer return 8 (1bytes)*/
-    //  case PQImode:
+      /* if it partial Quarter integer or Quarter integer */
       case QImode:
-        return 8;
-      /* if it partial half integer or half integer return 16 (2bytes)*/
-      //case PHImode:
+        return 127;
+      /* if it partial half integer or half integer */
       case HImode:
-        return 16;
-      //case PSImode: /*Partial Single Integer , we take worst case , maybe the value pointer*/ //31
+        return 32767;
+      /* Single Integer */ 
       case SImode:
-        return 32;
-      /*Double Intege / partial Double Intege */
-      //case PDImode:
+        return 2147483647;
 
+      /*Double Intege */
         /* NOTE : we currently supports only 32'bit*/
       case DImode:
-        return 64;
+        return 9223372036854775807;
 
     default:
-      return 64;
+      return 9223372036854775807;
     }
 }
+
+/* return max value that could be writen to destination Register*/
 static int 
 calcMaxValue(insns_to_value* node)
 {
   rtx expr;
-  if(node->code == REG){
-    //GET_MODE(XEXP(single_set(curr_insn),0))
-    expr = getExpr(node);
+  
+  expr = getDestReg(node);
   if(expr !=NULL_RTX){
- machine_mode mode=GET_MODE(expr);
-   return  getTypeSizeOnBits(mode);
-   // return 5;
-  }
+    machine_mode mode=GET_MODE(expr);
+    return  getRegMaxValue(mode);
+   }
 
-  return -1;
-  /*.... change struct? */
-   //  <------------------------------
-  }
+  return MAX_INT;
+ 
 }
  
-//----->find last pred functions
+/* return true if the key is exist */
+static bool 
+keyExistInBBtoBranch(int id){
+  std::map<int, if_then_else_node* >& bbToBranch=GetTableIfElseNode();
+  std::map<int, if_then_else_node*>::iterator theMapIt;
+ 
+ if(bbToBranch.empty())
+  return false;
 
+ theMapIt = bbToBranch.find(id);
+  return (theMapIt != bbToBranch.end());
+}
+ 
+
+/* insert new if_then_else_node to BBtoBranch map*/
+static void
+insertNewNodeToBBtoBranch(int id, if_then_else_node* node){
+  std::map<int, if_then_else_node* >& bbToBranch=GetTableIfElseNode();
+  std::map<int, if_then_else_node*>::iterator theMapIt;
+
+  if(!keyExistInBBtoBranch(id))
+  /* push new node with empty list */
+  bbToBranch.insert (std::pair<int, if_then_else_node*>(id,node)); 
+
+}
+
+/* return true if the key exist in the map  (used fo usedef to bb map) */
 static bool 
 keyExistInMap(std::map<int, std::list<rtx_insn*>> theMap, int id){
   std::map<int,std::list<rtx_insn*>>::iterator theMapIt;
@@ -1042,7 +1260,8 @@ keyExistInMap(std::map<int, std::list<rtx_insn*>> theMap, int id){
   return (theMapIt != theMap.end());
 }
 
-static void
+/*insert new insn to the mapped list  */
+static void 
 insertToMapList(std::map<int, std::list<rtx_insn*>> &theMap,int id, rtx_insn * insn){
 
   std::map<int,std::list<rtx_insn*>>::iterator theMapIt;
@@ -1053,7 +1272,8 @@ insertToMapList(std::map<int, std::list<rtx_insn*>> &theMap,int id, rtx_insn * i
   theMapIt->second.push_back(insn);
 }
 
-static void
+/* insert new use def insn to basic block list */
+static void 
 insertNewNodeToMap(std::map<int, std::list<rtx_insn*>> &theMap,int id, rtx_insn * insn){
   std::map<int,std::list<rtx_insn*>>::iterator theMapIt;
   std::list<rtx_insn*> newlist;
@@ -1066,34 +1286,44 @@ insertNewNodeToMap(std::map<int, std::list<rtx_insn*>> &theMap,int id, rtx_insn 
 
 }
 
+/* creat map key= basic block index value = list of insns in the basic block that write to the REG */
 static std::map<int/*BB ID*/,std::list<rtx_insn*> /*def insns in BB with ID =BB_ID*/>
-mapUseDefToBBid( rtx_insn* current_insn ){/*also we have global argumment insn_defs*/
+mapUseDefToBBid( rtx_insn* current_insn ){ 
 
   std::map<int, std::list<rtx_insn*>> theMap;
   basic_block currentBB=BLOCK_FOR_INSN(current_insn),defBB;
   rtx_insn *def_insn;
   int currentBbIndex=currentBB->index, defBbIndex;
   std::map<int,std::list<rtx_insn*>>::iterator theMapIt;
- /* */
+  /* for each reching defination */
   while(!insn_defs.is_empty ()){
     def_insn=insn_defs.pop();
+    /* get reaching def basic block index */
     defBB=BLOCK_FOR_INSN(def_insn);
     defBbIndex=defBB->index;
 
-     if(keyExistInMap(theMap,defBbIndex))
+    /* if it's first time we have reaching def from this basic block creat new pair with key=basic block index
+       and push the reching def on the pair list and push the pair on the  map.
+       else find the pair with key= basic block index and add the reching def to the list */
+    if(keyExistInMap(theMap,defBbIndex))
       insertToMapList(theMap, defBbIndex, def_insn);
     else
       insertNewNodeToMap(theMap,defBbIndex,def_insn);
   }
  return theMap;
 }
-/*pair first=reg index second= insn*/
+
+/*
+  input : pair first=reg index second= insn
+  output : map key = basic block index, value = reg use def on the basic block*/
 std::map<int,std::list<rtx_insn*>>
 getDefsPerBasicBlock(insns_to_value * node)
 {
   std::map<int,std::list<rtx_insn*>> BBsInsns;
   insn_defs.truncate (0);
 
+  /* save all reaching defination that write to REG(node->current_expr) to insn_defs vector
+    and check if the vector is  not empty */
   if (get_defs (node->current_insn,node->current_expr /*src_reg*/, &insn_defs)!=NULL)// get all insns dependency as list //def use chain
   {
     /* insert the insns into map 
@@ -1105,36 +1335,18 @@ getDefsPerBasicBlock(insns_to_value * node)
 }
 
 
-static std::list <rtx_insn *>
-findLastDomLoopInsn(insns_to_value * node){
-  std::list <rtx_insn *> s;
-  //<<<<<<<<<<<<<<<<<<<<----------------continue
-  return s;
-}
 
-static std::list <rtx*>
-findLastPredecessorsInsn(insns_to_value * node){
-  std::list <rtx *> s;
-
-    //<<<<<<<<<<<<<<<<<<<<----------------continue
-  return s;
-}
-static std::list <std::pair<rtx* , rtx*>> 
-mergeInsnsListWithRegInsnList(std::list <rtx *> insnList, std::list <std::pair<rtx* , rtx* >> RtxNodeList, rtx expr)
-{
- std::list <insns_to_value *>::iterator it_insnList;
- //for(it_insnList=insnList.begin(); it_insnList != insnList.end(), ++it_insnList){
-    //<<<<<<<<<<<<<------------------------continue
- //}
-
-
-}
-/* get pred closest BB index that contains Use-defs insns*/
+/* get predecessors closest BB index that contains Use-defs insns, return -1 if not found*/
 static int 
 getClosestBBwithUseDef(std::map<int,std::list<rtx_insn*>> defsToBBmap,std::list<int> predsBBindex){
-std::map<int,std::list<rtx_insn*>>::iterator theMapIt;
-int bbId;
+  
+  std::map<int,std::list<rtx_insn*>>::iterator theMapIt;
+  int bbId;
 
+/* predsBBindex is sorted list that have predecessors basic block indexs (sorted by distance from current insn basic block) 
+   each time we get next predecessor basic block index and check if we have reching defination 
+   on that basic block if the basic block contain reching def return here index else continue to next BB
+   if no predecessor basic block that contain reching def return -1 */
   while(!predsBBindex.empty()){
 
     bbId=predsBBindex.front();
@@ -1153,6 +1365,11 @@ int bbId;
 return -1; /* not found*/ 
 }
 
+
+/*
+  input : list of insns that write to the REG on the Basic block
+  output : last insn write to the REG on the Basic Block
+*/
 static rtx_insn* 
 getBBLastInsn(std::list<rtx_insn*> defInsnsList){
   int maxId,curId;
@@ -1180,9 +1397,16 @@ getBBLastInsn(std::list<rtx_insn*> defInsnsList){
   return result;
 }
 
+
+/* input: current insn(currentInsn) , node of the current insn(node) ,
+ list of all insns (from current  basic blocks) that write to REG(defInsnsList).
+
+  we try to find last insn that write to REG in the current basic block  if all the insns come after the current insn 
+  (There Luid greater than the current insn) we chose the closest predecessor basic block(to the current) and return the 
+  last insn from the predecessor Basic block*/
 static rtx_insn* 
 getBBLastInsnBeforCurrentInsn(  std::list<rtx_insn*> defInsnsList, rtx_insn *currentInsn, insns_to_value * node){
-    int maxId, curId, mainInsnId, wantedBBindex;
+    int maxId, curId, mainInsnId, lastDependBBindex;
   rtx_insn *cinsn,*result;
   bool firstTime=true;
   std::list<rtx_insn *>::iterator defListIter;
@@ -1191,36 +1415,37 @@ getBBLastInsnBeforCurrentInsn(  std::list<rtx_insn*> defInsnsList, rtx_insn *cur
   std::map<int,std::list<rtx_insn*>>::iterator defsToBBmapIter;
 
 
-
+ /*get current insn LUID*/
   mainInsnId = DF_INSN_LUID(currentInsn);
-
+  /*for each def in current basic block*/
   for(defListIter=defInsnsList.begin(); defListIter != defInsnsList.end(); ++defListIter)
   {
     cinsn= *defListIter;
 
     if(firstTime){
-      do
+      do /*do while we don't have insn with LUID less than current insn LUID*/
       {
         if((defListIter != defInsnsList.end())){
           maxId=DF_INSN_LUID(cinsn);
           result=cinsn;
          }
- 
+
+          /* if all the insns in the basic block come after the current insn return last insn in the closest pred basic block*/
          if((defListIter == defInsnsList.end())&&(maxId >=  mainInsnId))
           { 
             defsToBBmap=getDefsPerBasicBlock(node);
-                 /* get sorted list with current/pred BBs*/
+            /* get sorted list with current/pred BBs*/
             predsBBindex=get_bb_preds(BLOCK_FOR_INSN(currentInsn));
             predsBBindex.pop_front();
             /* get closest BB with index*/
-            wantedBBindex=getClosestBBwithUseDef(defsToBBmap,predsBBindex);
+            lastDependBBindex=getClosestBBwithUseDef(defsToBBmap,predsBBindex);
             /* to get closest BB use-def insns list*/
-            defsToBBmapIter = defsToBBmap.find(wantedBBindex);
+            defsToBBmapIter = defsToBBmap.find(lastDependBBindex);
             /* the wanted insn*/
-            if(wantedBBindex == -1)
+            if(lastDependBBindex == -1)
                return NULL;
             /* actully it will call getBBLastInsn wanted!=current*/
-            result=getBBLastInsn(defsToBBmapIter->second);//getBBLastInsanModifiedDestReg(wantedBBindex, defsToBBmapIter->second, currentInsn,node);
+            result=getBBLastInsn(defsToBBmapIter->second); 
 
             return result;
 
@@ -1234,15 +1459,15 @@ getBBLastInsnBeforCurrentInsn(  std::list<rtx_insn*> defInsnsList, rtx_insn *cur
 
          cinsn= *defListIter;
      
-
+      
       }while((maxId >= mainInsnId));
 
       firstTime=false;
     }
     if(defListIter ==  defInsnsList.end())
       return result;
-
     curId=DF_INSN_LUID(cinsn);
+    /* if cinsn come before current insn and it the last insn till now */
     if((curId>maxId)&&(curId<mainInsnId)){
       maxId=curId;
       result=cinsn;
@@ -1252,13 +1477,16 @@ getBBLastInsnBeforCurrentInsn(  std::list<rtx_insn*> defInsnsList, rtx_insn *cur
  
   return result;
 }
+
+/* This function return insns that could be the last insns modifies 
+*/
 static rtx_insn* 
-getBBLastInsanModifiedDestReg(int WantedBBindex, std::list<rtx_insn*> defInsnsList, rtx_insn *currentInsn, insns_to_value * node){
+getBBLastInsanModifiedDestReg(int lastDependBBindex, std::list<rtx_insn*> defInsnsList, rtx_insn *currentInsn, insns_to_value * node){
   basic_block currentInsnBB, defBb;
  
   currentInsnBB=BLOCK_FOR_INSN(currentInsn);
 
-    if(WantedBBindex != currentInsnBB->index)
+    if(lastDependBBindex != currentInsnBB->index)
       return getBBLastInsn(defInsnsList);
     else
       return getBBLastInsnBeforCurrentInsn(defInsnsList, currentInsn, node);
@@ -1266,310 +1494,372 @@ getBBLastInsanModifiedDestReg(int WantedBBindex, std::list<rtx_insn*> defInsnsLi
 }
 
 
-/*return true if there code_label between two insns*/
-static bool ThereCodeLabelBetweenInsns(rtx_insn *first, rtx_insn *second){
+/* 
+ This function return the last insns that could modifie the REG value
+ we push to the stack only src REG or reg use def insns  , here we search the last insn could write to this REG.
 
-  //<<<<<<<<<<<<<----need implementation <----------continue
-
-return false;
-}
-static std::list < rtx_insn * > 
-getInsnsBetweenLabels(insns_to_value *node, rtx_insn *resultInsn){
-   std::list < rtx_insn* > regInsns;
-   return   regInsns;
-}
-
+ if the current Basic Block is EXIT basic block for IF_THEN_ELSE insn, we push to the list (and the stack later)
+ last insn modifie the REG on IF basic block, and last insn Modifie the REG on Else Basic Block also */
 
 static std::list < rtx_insn * > 
-findLastInsanModifiedDestReg(insns_to_value * node)
+getLastDependedInsns(insns_to_value * node)
 {
- // std::list <std::pair<rtx* , rtx* >> srcRegsInsn;/* insns from all the src regs*/
-  std::list < rtx_insn* > regInsns;/* for single source reg*/
+  int numOfOperands, i, firstSrcOp, lastDependBBindex, predBBindex,resultBBindex=-1;
+  rtx expr, source;
+  rtx_code code;
+  basic_block currentBB;
+  bool register_depend_on_if_then_else=false;
+
+  /* for single source reg  (if we have more than src this function will be called more than one time)*/
+  std::list < rtx_insn* > regInsns;
+  std::list < rtx_insn* > emptyList;
+
+  /* map key= Basic block value = insn on Basic Block that modifie the REG value */
   std::map<int,std::list<rtx_insn*>> defsToBBmap;
   std::map<int,std::list<rtx_insn*>>::iterator defsToBBmapIter;
 
+  /*if then else Exit basic block to Basic block map */
+  std::map<int, if_then_else_node* >::iterator ExitBBtoIfElseIterator;
+  std::map<int, if_then_else_node*>& ExitBBtoIfElseBBMap = GetTableExitBBtoIfElseBBMap();
+
+  /* List hold predecessors basick blocks index */
   std::list<int> predsBBindex;
   rtx_insn *currentInsn, *resultInsn;
   currentInsn = node->current_insn;
 
 
-  int numOfOperands, i, firstSrcOp, wantedBBindex, predBBindex;
-  rtx expr, source;
-  rtx_code code;
-  basic_block currentBB;
+   
  
-  /* get expr and expr operands number*/
+  /* get expr and expr operands count */
   expr=getExpr(node);
   numOfOperands=getNumberOfOperands(expr);
-  /* get first src if ther no src reg it will return numOfOperands */
+  /* get first src. if there no src reg, it will return 0*/
   firstSrcOp=firstOperandSrc(node->father);
   currentBB=BLOCK_FOR_INSN(node->current_insn);
 
-  /*if expr not part of loop */
+   /* check if we have src operand , (operandnum start from 1 if we have some insn like subreg firstSrcOp
+    will have value 0 and we will not excute the if code) */
   if(node->opernadNum > firstSrcOp)
   {
-        if(!isPartOfLoop(node->current_insn)){
-          defsToBBmap=getDefsPerBasicBlock(node);
-          /* get sorted list with current/pred BBs*/
-          predsBBindex=get_bb_preds(currentBB);
-          /* get closest BB with index*/
-          wantedBBindex=getClosestBBwithUseDef(defsToBBmap,predsBBindex);
-          /* to get closest BB use-def insns list*/
-          defsToBBmapIter = defsToBBmap.find(wantedBBindex);
-          /* the wanted insn*/
-          if(wantedBBindex == -1)
-             return regInsns;
-          resultInsn=getBBLastInsanModifiedDestReg(wantedBBindex, defsToBBmapIter->second, currentInsn, node);
-          if(resultInsn == NULL)
-             return regInsns;
+    defsToBBmap=getDefsPerBasicBlock(node);
+    /* get sorted list with current/pred BBs */
+    predsBBindex=get_bb_preds(currentBB);
+    /* get closest BB with index */
+    lastDependBBindex=getClosestBBwithUseDef(defsToBBmap,predsBBindex);
+    /* to get closest BB use-def insns list*/
+    defsToBBmapIter = defsToBBmap.find(lastDependBBindex);
+    /* the wanted insn */
+    if(lastDependBBindex != -1){
+      /* get last depend insn */
+      resultInsn=getBBLastInsanModifiedDestReg(lastDependBBindex, defsToBBmapIter->second, currentInsn, node);
+        if(resultInsn != NULL){
+          regInsns.push_back(resultInsn);
+          resultBBindex = BLOCK_FOR_INSN(resultInsn)->index;
 
-          if(ThereCodeLabelBetweenInsns(resultInsn,currentInsn)){
-            /*TODO: if there code label bettwen resultinsns and current insn means that current insn can take its value
-            from other insn if there  code label bettwen resultinsn and here SRCs (THE SAME RECURSIVE PROBLEM) 
-
-            reginsn=push wanted use def insn and insert them with label get max to same father
-            example
-            x=0;
-            if(foo()){
-              x=x+y; <--wanted
-            }
-            else
-            {
-              if(boo){
-                 x=x+11 <--wanted
-              }
-              else
-              {
-                x=x*3; <--wanted
-              }
-              x++; <--previnsn, wanted
-            }
-            zeroextend(x)<--curent insn
-
-
-             */
-          regInsns=getInsnsBetweenLabels(node,resultInsn);
-
-
-          }
-          else{
-
-            regInsns.push_back(resultInsn);
-          }
         }
-        else
-          regInsns=findLastDomLoopInsn(node);
+    }
+    /* if current insn is exit bassic block for some if then else and no rechig defination on the same basic block */
+    ExitBBtoIfElseIterator = ExitBBtoIfElseBBMap.find(currentBB->index);
+    if((ExitBBtoIfElseIterator != ExitBBtoIfElseBBMap.end())&&(resultBBindex!=currentBB->index)){
 
-       // srcRegsInsn = mergeInsnsListWithRegInsnList(regInsns,srcRegsInsn,source);
-  }  
-    
+      /* if in the "if" basic block there is insn that write to the REG add it to the list*/
+      defsToBBmapIter = defsToBBmap.find(ExitBBtoIfElseIterator->second->if_bb_index);
+      if(defsToBBmapIter !=defsToBBmap.end() ){
+        resultInsn=getBBLastInsanModifiedDestReg(ExitBBtoIfElseIterator->second->if_bb_index, defsToBBmapIter->second, currentInsn, node);
+        if(resultInsn != NULL){
+          regInsns.push_back(resultInsn);
+          }
+      }
+
+      /* if in the "else" basic block there is insn that write to the REG add it to the list*/
+      defsToBBmapIter = defsToBBmap.find(ExitBBtoIfElseIterator->second->else_bb_index);
+      if(defsToBBmapIter !=defsToBBmap.end() ){
+        resultInsn=getBBLastInsanModifiedDestReg(ExitBBtoIfElseIterator->second->else_bb_index, defsToBBmapIter->second, currentInsn, node);
+        if(resultInsn != NULL){
+          regInsns.push_back(resultInsn);
+        }
+      }
+
+    }
+          
+
+  }
+
+  /* we didn't support yet two if then else that write to the same REG 
+  and all the basic blocks bettwen the two if then else have no insn that write to REG 
+
+  also we not support nested if then else yet so on that case we will return max/min value range 
+  as result REG operand list will be empty and we will calculate max value 
+  (another problem if we have zero extend on the if then else)
+  if we have nested if then else we dont now also all the IF_THEN_ELSE ExitBasickBlock 
+  because the nested if then else will divid the if/else basic block to more than one basic block
+  and to now the exit basic block we should find the jump  on the nested exit basic block
+  so for now we return max value if we have more than one if then else
+   */
+  
+  if(functionHaveMoreThanOneIfThenElse)
+       return emptyList;  
   
     return regInsns;
    
 }
+
+/* return true if we support the insn else return false(if insn not supported we will put max value) */
 static bool
-isCalculable(insns_to_value * node){
-
-  switch(node->code){
-     case MEM:
-     case CALL_INSN:
-     case CALL:
-
-    /* in Case of MEM,CALL_INSN insn we don't want to continue and we will put maxValue*/
-     /* some cases of MEM OP we can optimize but currently we do not support MEM*/
-
-      return false;
-    default:
-      return true;
-  }
+isSupported(rtx_code  code){
+ if((code == MEM)||(code == CALL_INSN) || (code == CALL) )
+    return false;
+  return true;
+  
 }
 
+/*return true if current operand is src operand*/
 static bool 
 isSrcOperand(insns_to_value * node, int opNum){
-
-  
-  if((!isCalculable(node))||(opNum<firstOperandSrc(node)))
+  if((opNum<firstOperandSrc(node)))
     return false;
-  
-  switch(node->code){
-
-  default:
-    return true;
-    
-  }
+  return true;
 
 }
 
+/* creat new node for insn and push the node to stack*/
 static insns_to_value *
 pushInsnToStack(rtx_insn * currentInsn,insns_to_value * father,rtx curr_expr,int opNum,int type, std::stack<insns_to_value*> &stack){
   insns_to_value *node;
 
   node=build_insn_to_value_node(currentInsn,curr_expr,opNum,father,type);
   stack.push(node);
- return node;
+  return node;
 }
+
+/* creat node for each src operand and push them to the stack*/
 static void 
 pushOperandsToStack(insns_to_value * currentNode, std::stack<insns_to_value*> &stack){
    int i, numOfOperands;
-   rtx  expr;//,subExpr
+   rtx  expr;
    insns_to_value *node;
+   bool flag=true;
+  expr=getExpr(currentNode);
+  numOfOperands=getNumberOfOperands(expr);
+  /* check if we support the all operands if at least one operand not supported
+     mark current expression as not supported to be calculated as max value*/
+  for(i=0; i<numOfOperands; i++){
+    /* check if the current operand is src operand */
+    if(isSrcOperand(currentNode,i)){
+      rtx subExpr=XEXP(expr, i);
+      /*check if we support the current operand*/
+      if(!isSupported(GET_CODE(subExpr))){
+        flag=false;
+        currentNode->is_supported=false;
+        break;
+      }
+    }
+  }
 
-    expr=getExpr(currentNode);
-    numOfOperands=getNumberOfOperands(expr);
+  /*if all operands supported creat node for each operand and push them to the stack*/
+  if(flag){
+    for(i=0; i<numOfOperands; i++){ 
+      rtx subExpr=XEXP(expr, i);
+      if(isSrcOperand(currentNode,i))
+        node=pushInsnToStack(currentNode->current_insn, currentNode, subExpr, i+1, D_BTM_EXPR, stack);
 
-   for(i=0; i<numOfOperands; i++){ 
-    rtx subExpr=XEXP(expr, i);/* to have different  memory locations*/ /***** i need to change it to malloc after that when we exit the block maybe the memory removed*/
-    if(isSrcOperand(currentNode,i))
-      node=pushInsnToStack(currentNode->current_insn, currentNode, subExpr, i+1, D_BTM_EXPR, stack);
-
-   }
+    }
+  }
    
 }
+
+
 /* update current node value and push the value to father list*/
 static void 
 updateNodesValue(insns_to_value* node, long long int value ){
   int intValue;
-  if(value>MAX_INT)
-    intValue=MAX_INT;
+  if(value > MAX_INT)
+    intValue = MAX_INT;
   else
     intValue=value;
 
-  node->value=value;
+  node->value=intValue;
   if(node->father != NULL)
-    node->father->operands_value.push_back(value);
+    node->father->operands_value.push_back(intValue);
 }
 
+/* 
+    This function calculate insn vlaue or return the maximum value that could be
+    the insn value
+
+*/
 static long long int
-calcArithmetic(insns_to_value* node){
+valuate(insns_to_value* node){
   std::list<int>::iterator opvlistIter;
   long long int value=0;
-  int i,x,y;
-  switch(node->code){
-        case MINUS:
-        case DIV:
-        case MOD:
-        case AND :
-        case IOR:
-        case XOR:
-        case ASHIFT:
-        case ASHIFTRT:
-        case LSHIFTRT:
-          x = * (node->operands_value.begin());
-          y = * (++node->operands_value.begin());
-          break;
-        default:
-          opvlistIter = node->operands_value.begin();
-
+  long long int max_reg_value,max_operand_value;
+  /*if the insn is not const and dosnt have sons
+    if we found that we canot valuate the insn/expr we will not push here operands/use def insn
+    in that case we will return here max value depent on pred dest reg */
+  if(node->operands_value.size()==0  ){
+    max_reg_value = calcMaxValue(node);
+    updateNodesValue(node, max_reg_value);
+    return max_reg_value;
   }
+  /* intlize operands value */
+  int i;
+  long long int x,y; 
+
+  if(node->operands_value.size()>1){
+    x = * (node->operands_value.begin());
+    y = * (++node->operands_value.begin());
+  }
+  opvlistIter = node->operands_value.begin();
+
+
 //operands_value
   switch(node->code){
+
+    case REG:
+      value = MAX_INT;
+      max_reg_value = calcMaxValue(node);
+      if(max_reg_value < value)
+        value = max_reg_value;
+      if(node->operands_value.size() > 0){
+        max_operand_value = * (node->operands_value.begin());
+        for(opvlistIter = node->operands_value.begin(); opvlistIter != node->operands_value.end(); ++opvlistIter ){
+          if( max_operand_value < (*opvlistIter))
+            max_operand_value =  (*opvlistIter);
+
+        }
+      }
+      if(max_operand_value < value )
+        value = max_operand_value;
+      
+      updateNodesValue(node, value);
+      break;
+
     case ZERO_EXTEND:
     case SET:
-    case REG:
     case SUBREG:
     case SIGN_EXTEND:
     case TRUNCATE:
-       value = *opvlistIter;
+      value = *opvlistIter;
       updateNodesValue(node, value);
-      return value;
+      break;
 
     case PLUS:
-      for(opvlistIter = node->operands_value.begin(); opvlistIter != node->operands_value.begin(); ++opvlistIter ){
+      value=0;
+      for(opvlistIter = node->operands_value.begin(); opvlistIter != node->operands_value.end(); ++opvlistIter ){
         value=value + *opvlistIter;
-       }
-        updateNodesValue(node, value);
-        return value;
+      }
+      updateNodesValue(node, value);
+      break;
 
     case MINUS:
       value =x-y;
       updateNodesValue(node, value);
-      return value;
+      break;
 
     case MULT:
-      for(opvlistIter = node->operands_value.begin(); opvlistIter != node->operands_value.begin(); ++opvlistIter ){
+      value=1;
+      for(opvlistIter = node->operands_value.begin(); opvlistIter != node->operands_value.end(); ++opvlistIter ){
         value = value * (*opvlistIter);
        }
-        updateNodesValue(node, value);
-        return value;
-      /*
-      add case SS_MULT ,US_MULT ,SS_DIV ,US_DIV , UDIV , UMOD ,ROTATE,ROTATERT,LSHIFTRT,smin,smax,umin,umax*/
+      updateNodesValue(node, value);
+      break;
+       
     case DIV:
       value =x/y;
       updateNodesValue(node, value);
-      return value;
+      break;
 
     case MOD:
       value =x%y;
       updateNodesValue(node, value);
-      return value;
+      break;
 
     case AND :
       value =x&y;
       updateNodesValue(node, value);
-      return value;
+      break;
 
     case IOR:
       value =x|y;
       updateNodesValue(node, value);
-      return value;
+      break;
 
     case XOR:
       value =x ^ y;
       updateNodesValue(node, value);
-      return value;
+      break;
 
     case NOT:
       value = ~(*opvlistIter);
       updateNodesValue(node, value);
-      return value;
+      break;
 
 
     case NEG:
       value =  - (*opvlistIter);
       updateNodesValue(node, value );
-      return value;
+      break;
 
     case ASHIFT:
       value = x << y;
       updateNodesValue(node, value );
-      return value;
+      break;
 
     case LSHIFTRT:
       value = x >> y;
       updateNodesValue(node, value );
-      return value;
+      break;
 
     case ASHIFTRT:
       value = x >> y;
       if ((x < 0 ) && (y > 0))
         value = ( x >> y | ~(~0U >> y));//x>>y | 0xffff>>y
      updateNodesValue(node, value );
-     return value;
+     break;
 
 
-
-
-
+     default:
+      value = calcMaxValue(node);
+      updateNodesValue(node, value);
+      break;
   }
+
+
+
+  return value;
 
 }
 
 
-/*if the insn in the node visited means the insn operands value is valid so in that case the function will calculate the current insn value 
-Note: each operand is insn
-if the insn not visited before :
-if the insn is REG find the last insn write to the register and push the last insn and the last insn operands to the stack (try to calculate the last insn value).
-if the insn have more than one opernad (i.e not (constant or REG)) push  the operands to the stack (to calculate the insn value) 
- */
+ /*
+  this function calculate insn value or push to the stack the insns sons 
+  son can be:
+    *insn operand 
+    * insn that could be the last insns modifie the REG if current node is REG
+  IF the node is NOT VISITED:
+    * we put here sons on the stack and mofie there father to point to the current node 
+    * if the node insn is REG we found last insns could modifie the REG and push them to the stack 
+      and mofie there father to point to the current node (the REG) 
+       * if the insn that that modifie the REG is vistid means we have circular dep 
+         getLastDependedInsns function will not add this insn
+         then next time will marked as visted and it will still on the top of the stack
+  If the node is VISITED :
+    if the node is:
+      *REG : we calculate the max value could the register have
+      * NOT REG : we will calculate the value see calcArithmetic function
+*/
 static bool 
 calcValue(insns_to_value* node,std::stack<insns_to_value*> &stack){
   int value;
   std::list <rtx_insn* > lastInsnM;
   std::list <rtx_insn*>::iterator itlastInsnM;
+  std::list<int> readyInsnsId;
+  std::list<int>::iterator readyInsnsIdIter;
+
   rtx_insn* newInsn;
-   //std::pair<rtx*, rtx*> regInsnPair;
-  
+
   bool visited;
+  bool all_last_insns_is_supported=true;
   if(node->type == D_BTM_INSN)
     visited=InsansIsVisited(node->current_insn);
   else
@@ -1582,12 +1872,14 @@ calcValue(insns_to_value* node,std::stack<insns_to_value*> &stack){
   {
     /*if constant value that is an integer. i.e CONST_INT,CONST_WIDE_INT,CONST_POLY_INT,CONST_FIXED,CONST_DOUBLE,CONST_VECTOR, CONST, HIGH */
     if((GET_RTX_CLASS (node->code) == RTX_CONST_OBJ)){
-
+     
+      /* get node insn as rtx */
       expr=getExpr(node);
-      value= XINT(expr, 0);/* get operand as int */
-
-        node->value = value;
-      /* if it's the first insn */
+      /* get the value of first operand as integer (const value as intger) */
+      value= XINT(expr, 0);
+      /* update Node value */
+      node->value = value;
+      /* if it's the first insn pushed to the stack (the main insn) mark it as valid */
       if(stack.size()==1)
       {
          node->valid_value=true;
@@ -1596,79 +1888,575 @@ calcValue(insns_to_value* node,std::stack<insns_to_value*> &stack){
       {
         /* push value to father list */
          node->father->operands_value.push_back(value);
+
       }
 
      
     }
     else
     {
-      /* reaching non constant insn twice means that we cannot calculate it as constant value. 
-       so we calculate the maximum value that the insn can reach depend to on type */
-      if((node->code == REG)&&(node->operands_value.empty())){
-      value = calcMaxValue(node); 
-         if(stack.size()==1)
-        {
-          node->value = value;
-          node->valid_value=true;
-        }
-        else
-        {
-          /* push value to father list */
-          node->father->operands_value.push_back(value);
-        }
-    }
-    else{
-     value = calcArithmetic(node);
-    }
+     /* if insn is NOT constant  */
+     value = valuate(node);
 
     }
+
+
     return true;
   }
   else /* insn dose not marked as visited */
     {
        
-       /* if insn has one operand and not UNARY insn(did not have sub insn)*/  
-      if(GET_RTX_LENGTH(node->code) == firstOperandSrc(node))
-      {
-        /* if the insn is REG push the last insn that modified the REG before executing and push the insn operands
-         Note: also if the last insn is PHI its ok becouse we push the both PHI operands */
+        /* if the insn is REG push all last depended insn to the stack*/
         if(node->code == REG){
-          lastInsnM = findLastInsanModifiedDestReg(node);
-        
-           for(itlastInsnM=lastInsnM.begin(); itlastInsnM != lastInsnM.end(); ++itlastInsnM){
+          lastInsnM = getLastDependedInsns(node);
+          for(itlastInsnM=lastInsnM.begin(); itlastInsnM != lastInsnM.end(); ++itlastInsnM){
             newInsn = *itlastInsnM;
-            //pushInsnToStack(rtx_insn * currentInsn,insns_to_value * father,rtx curr_expr,int opNum,int type, std::stack<insns_to_value*> &stack){
-          if(newInsn!=NULL_RTX){
             expr=single_set(newInsn);
-            markInsnsAsVisited(newInsn);
-            cNode = pushInsnToStack(newInsn, node, expr, 0, D_BTM_INSN, stack);
-
-            pushOperandsToStack(cNode , stack);
+            if(!isSupported(GET_CODE(expr))){
+              all_last_insns_is_supported=false;
+              node->is_supported=false;
+              break;
             }
+
+          }
+
+          /*if we have dependency with unsupported insn like CALL_INSN we will not push any dependency and as result 
+            REG will have MAX value*/
+          if(all_last_insns_is_supported){
           
-           }
+            readyInsnsId.clear();
+            /* for each last depended insn */
+            for(itlastInsnM=lastInsnM.begin(); itlastInsnM != lastInsnM.end(); ++itlastInsnM){
+              newInsn = *itlastInsnM;
+                if(newInsn!=NULL_RTX){
+                  expr=single_set(newInsn);
+               
+                  readyInsnsIdIter = std::find(readyInsnsId.begin(), readyInsnsId.end(), INSN_UID(newInsn));
+                  /* if insn not in the ready list (to avoid push the same insn as son more than once*/
+                  if (readyInsnsIdIter == readyInsnsId.end()){
+                    /* add to ready list*/
+                    readyInsnsId.push_back(INSN_UID(newInsn));
+                    /* creat Node for the new insn and push it to stack*/
+                    cNode = pushInsnToStack(newInsn, node, expr, 0, D_BTM_INSN, stack);
+                    /* next iteration operands will puted to the stack*/
+
+                  }
+                }
+          
+            }
+          }
 
         }
-      }
-      else
-      {
-        pushOperandsToStack(node, stack);
-      }
+        else
+        {
+          pushOperandsToStack(node, stack);
+        }
+  
+      
       return false;
     }
 
 }
 
+/* this function return 
+ 0 if there is no nesten IF_THEN_ELSE
+ 1 if there only in IF BASic Block nested IF_THEN_ELSE
+ 10 if there only in else BASic Block nested IF_THEN_ELSE
+ 11   in both if/else BASic Block nested IF_THEN_ELSE
+*/
+static int
+has_nested_if_then_else(rtx_insn* insn){
+  int result =0;
+
+  bool getnextinsn;
+  basic_block else_bb, if_bb;
+  rtx_insn* insnTemp; 
+  rtx_insn * insnnext;
+
+  /* get IF_THEN_ELSE label_ref */
+  rtx label_ref=XEXP(XEXP(single_set(insn),1),1); 
+  /*label ref point to code_label get the code_label insn*/
+  rtx code_label=XEXP(label_ref,0); 
+  /* get next insn*/
+  rtx insn_after_label_2= XEXP(code_label,1);
 
 
- 
+  /* get first insn on ELSE BasicBlock i.e (condition == false) BasicBlock */
+  if(insn_after_label_2 != NULL_RTX){
+    while((GET_CODE(insn_after_label_2)!=INSN) && (GET_CODE(insn_after_label_2)!=CALL_INSN) && (GET_CODE(insn_after_label_2)!=JUMP_INSN)) {
+      /* get next insn (XEXP(this,1) return next insn [rtl.h])*/
+      insn_after_label_2=XEXP(insn_after_label_2,1); 
+        if(insn_after_label_2 == NULL_RTX)
+          break;
+    }
+  }
 
-/* return insn value or max value that the insn could have*/
-static int 
-find_insns_value(rtx_insn *curr_insn){
+  /*if there IF_THEN_ELSE insn in ELSE Basick block return put in result 10 */
+  if(insn_after_label_2 != NULL_RTX){
+    else_bb = BLOCK_FOR_INSN(insn_after_label_2);
+     FOR_BB_INSNS (else_bb, insnTemp)
+      {
+        if(GET_CODE(insnTemp) == JUMP_INSN)
+          if(GET_CODE(XEXP(single_set(insnTemp),1)) == IF_THEN_ELSE ){
+            result=10;
+            break;
+          }
+      }
+  }
+
+  /* get first insns on the IF BasicBlock i.e (condition ==true) BasicBlock */
+  insnnext=NEXT_INSN(insn);
+  if(insnnext != NULL){
+    while( (GET_CODE(insnnext)!=INSN) && (GET_CODE(insnnext)!=CALL_INSN) && (GET_CODE(insnnext)!=JUMP_INSN) ){
+      insnnext=NEXT_INSN(insnnext);
+      if(insnnext == NULL)
+         break; 
+    }
+  } 
+
+  /*if there IF_THEN_ELSE insn in IF Basick block add 1 to result and break */
+  if(insnnext != NULL){
+    if_bb =BLOCK_FOR_INSN(insnnext);
+      FOR_BB_INSNS (if_bb, insnnext)
+        {
+          if(GET_CODE(insnnext) == JUMP_INSN)
+            if(GET_CODE(XEXP(single_set(insnnext),1)) == IF_THEN_ELSE ){
+              result=result+1;
+              break;
+            }
+        }
+  }
+
+
+return result;
+}
+
+
+
+
+
+/* 
+ input : jump if_then_else insn without nested jump
+
+ return std::pair<dest BB ,list<if/else basic blocks>>. 
+*/
+
+static std::list<int>
+getBranchDestBlocksIndexs(rtx_insn* insn){
+  std::list<int> DestBlockIndexs;
+
+  
+  rtx_insn * insnnext;
+  /*get if then else label_ref*/
+  rtx label_ref=XEXP(XEXP(single_set(insn),1),1); 
+  /* get code label */
+  rtx code_label=XEXP(label_ref,0); 
+
+  /* find first insn after code label (else basic block) */
+  rtx insn_after_label_2= XEXP(code_label,1);
+  if(insn_after_label_2 != NULL_RTX){
+    while((GET_CODE(insn_after_label_2)!=INSN) && (GET_CODE(insn_after_label_2)!=CALL_INSN) && (GET_CODE(insn_after_label_2)!=JUMP_INSN)){
+      insn_after_label_2=XEXP(insn_after_label_2,1);//insn_after_label_1 = NEXT INSN 
+        if(insn_after_label_2 == NULL_RTX)
+          break;
+    }
+  }
+  /* push else basic block index to list*/
+  if(insn_after_label_2 != NULL_RTX)
+    DestBlockIndexs.push_back(BLOCK_FOR_INSN(insn_after_label_2)->index);
+
+  /*find first insn in if_basic block*/
+  insnnext=NEXT_INSN(insn);
+  if(insnnext != NULL){
+    while( (GET_CODE(insnnext)!=INSN) && (GET_CODE(insnnext)!=CALL_INSN) && (GET_CODE(insnnext)!=JUMP_INSN) ){
+      insnnext=NEXT_INSN(insnnext);
+      if(insnnext == NULL)
+        break; 
+    }
+  } 
+
+  /* push if_basic block index to list*/
+  if(insnnext != NULL)
+    DestBlockIndexs.push_back(BLOCK_FOR_INSN(insnnext)->index);
+  
+  /* return the list */
+  return DestBlockIndexs;
+}
+
+/*this function build Basic Block to IF_THEN_ELSE map
+  input: list of if_then_else insns*/
+static void 
+build_BB_to_branch_map(std::list <rtx_insn* >& ifThenElseInsnsList){
+  int bbIndex;
+  std::list <rtx_insn* >::iterator IfElseListIter;
+  
+  /* get global bbToBranch by reference */
+  std::map<int, if_then_else_node* >& bbToBranch=GetTableIfElseNode();
+   
+   /* for each if_then_else insn */
+  for(IfElseListIter=ifThenElseInsnsList.begin(); IfElseListIter != ifThenElseInsnsList.end(); ++IfElseListIter){
+    /* get if then else basic block index */
+    bbIndex=BLOCK_FOR_INSN(*IfElseListIter)->index;
+    /* creat new if_then_else node*/
+    if_then_else_node* ifelsenode=build_if_then_else_node( *IfElseListIter);
+    /* add the node to map key= basic block index value= if_then_else node*/
+    insertNewNodeToBBtoBranch(bbIndex, ifelsenode);
+  }
+
+}
+/*
+this function should get as paramter sample jump like:
+
+(jump_insn 75 24 76 (set (pc)
+        (label_ref 36)) 239 {jump}
+     (nil)
+
+if given jump not sample jump we return -1 
+else it return  index of jump destination basic block
+*/
+static int
+getJumpDestBBindex(rtx_insn* jmpinsn){
+  std::map<int,rtx_insn*>& uidToInsnMap=GetTableInsn();
+  std::map<int,rtx_insn*>::iterator insnsMapIter;
+  rtx_insn* insnnext;
+
+  /* check if we have sample jump i.e not IF_THEN_ELSE */
+  rtx label_ref = XEXP(single_set(jmpinsn),1); 
+  if(GET_CODE(label_ref) != LABEL_REF)
+     return -1;
+
+  /* get code label as rtx_insn */
+  rtx code_label = XEXP(label_ref,0);
+  insnsMapIter = uidToInsnMap.find(INSN_UID(code_label));
+  insnnext = insnsMapIter->second;
+
+  /*find first insn after code label
+   actually sample jump destination can't be to JUMP_INSN or CALL_INSN because compiler can optimize it and replace
+    the jump insn */
+  while((GET_CODE(insnnext)!=INSN) && (GET_CODE(insnnext)!=CALL_INSN) && (GET_CODE(insnnext)!=JUMP_INSN)){
+    insnnext=NEXT_INSN(insnnext);
+    if(insnnext == NULL)
+       break; 
+  }
+   /*if not return jump*/
+    if(insnnext != NULL)
+      return BLOCK_FOR_INSN(insnnext)->index;
+    return -1;
+}
+
+
+/* return jump insn on basic block with index=bbIndex and null if there is no jump insn */
+static rtx_insn*
+find_jump_insn(int bbIndex){
+  rtx_insn* bbinsn;
+  basic_block bb;
+  bb= get_bb(bbIndex);
+
+  if(bb!=NULL){
+    FOR_BB_INSNS (bb, bbinsn)
+    {
+      if(GET_CODE(bbinsn) == JUMP_INSN)
+      {
+       return  bbinsn;
+      }
+    }
+  }
+  return NULL;
+}
+// static int
+// findAndUpdateExitBlock(rtx_insn* insn){
+//   std::map<int, if_then_else_node* >& bbToBranch=GetTableIfElseNode();
+
+//   basic_block if_bb, else_bb;
+//   if_then_else_node * ifElseNode;
+//   rtx_insn* bbinsn;
+//   int bbIndex;
+//   std::map<int, if_then_else_node*>::iterator theMapIt;
+//   bbIndex=BLOCK_FOR_INSN(insn)->index;
+
+//   theMapIt = bbToBranch.find(bbIndex);
+//   ifElseNode = theMapIt->second;
+//   if(ifElseNode->isValid){
+//   if_bb = get_bb(ifElseNode->if_bb_index);
+//   else_bb = get_bb(ifElseNode->else_bb_index);
+
+//   FOR_BB_INSNS (if_bb, bbinsn)
+//   {
+//     if(GET_CODE(bbinsn) == JUMP_INSN)
+//     {
+//       ifElseNode->exit_bb_index=getJumpDestBBindex(bbinsn);
+//       return  ifElseNode->exit_bb_index;
+//     }
+//   }
+
+//   FOR_BB_INSNS (else_bb, bbinsn)
+//   {
+//     if(GET_CODE(bbinsn) == JUMP_INSN)
+//     {
+//       ifElseNode->exit_bb_index=getJumpDestBBindex(bbinsn);
+//       return  ifElseNode->exit_bb_index;
+//     }
+//   }
+// }
+
+// return -1;
+
+// }
+
+/* input if/else basic block index , and if_then_else insn
+   this function update if_then_else node*/
+static void
+updateNodeIfElseBolckIndex(std::list<int>& DestBlockIndexs, rtx_insn* insn){
+
+  std::map<int, if_then_else_node* >& bbToBranch=GetTableIfElseNode();
+  int bbIndex;
+  std::list<int>::iterator destBBiter;
+  std::map<int,if_then_else_node*>::iterator theMapIt;
+  if_then_else_node * ifElseNode;
+
+  /*find if_then_else node in the map*/
+  destBBiter = DestBlockIndexs.begin();
+  bbIndex=BLOCK_FOR_INSN(insn)->index;
+  theMapIt=bbToBranch.find(bbIndex); 
+  
+  /*update the node*/
+  ifElseNode=theMapIt->second;
+  ifElseNode->else_bb_index = *(DestBlockIndexs.begin());
+  ifElseNode->if_bb_index = *(++DestBlockIndexs.begin());
+}
+
+
+
+
+/* this function build IF_THEN_ELSE_EXIT Basic block to  IF/ELSE basic blocks map to be used in calcvalue function
+ */
+static void
+save_if_then_else_data(){
+  std::map<int, if_then_else_node* >& bbToBranch=GetTableIfElseNode();
+  std::list <rtx_insn* > ifThenElseInsnsList;
+  std::list <rtx_insn* >::iterator IfElseListIter;
+  std::list<int> DestBlockIndexs;
+  std::list<int> doneIfElseList;
+  std::list<int>::iterator doneIter;
+
+  std::map<int, if_then_else_node* >::iterator nodeIter;
+  std::map<int, if_then_else_node* >::iterator nodeItereew;
+  std::map<int, if_then_else_node*>& ExitBBtoIfElseBBMap = GetTableExitBBtoIfElseBBMap();
+
+  int if_bb_index, else_bb_index, jump_dest;
+  if_then_else_node *currentNode, *newNode;
+  basic_block bb;
+  rtx_insn *insn, *jump_insn;
+  rtx expr;
+  rtx_code code;
+
+  /* push IF_THEN_ELSE insn to list*/
+  FOR_EACH_BB_FN (bb, cfun)
+  {
+    FOR_BB_INSNS (bb, insn)
+    {
+      if(GET_CODE(insn) == JUMP_INSN)
+          if(GET_CODE(XEXP(single_set(insn),1)) == IF_THEN_ELSE )
+            ifThenElseInsnsList.push_back(insn);
+    }
+  }
+
+  if(ifThenElseInsnsList.size() > 1)
+    functionHaveMoreThanOneIfThenElse = true;
+  else
+    functionHaveMoreThanOneIfThenElse = false;
+
+  /* build map key = Basic Block index value = IF_THEN_ELSE node*/
+  build_BB_to_branch_map(ifThenElseInsnsList);
+
+  /*  find if/else Basic blocks and update the nodes*/
+  for(IfElseListIter=ifThenElseInsnsList.begin(); IfElseListIter != ifThenElseInsnsList.end(); ++IfElseListIter){
+    if(GET_CODE(*IfElseListIter)== JUMP_INSN ){
+      DestBlockIndexs = getBranchDestBlocksIndexs(*IfElseListIter);
+      updateNodeIfElseBolckIndex(DestBlockIndexs, *IfElseListIter);
+    }
+  }
+
+
+/* find EXIT basick block for each IF_THEN_ELSE NODE
+   if the IF_THEN_ELSE have nested IF_THEN_ELSE find first the nested EXIT Basick block
+   then found the curren node EXIT basic block by searching  jump insn on the nested EXIT Basic block
+   if there is no jump insns in both  IF BB and ELSE bb  EXIT BB will be else BB or the  nested If then EXIT*/
+  for(IfElseListIter=ifThenElseInsnsList.begin(); IfElseListIter != ifThenElseInsnsList.end(); ++IfElseListIter){
+  
+    /* get current if_then_else node */ 
+    nodeIter=bbToBranch.find(BLOCK_FOR_INSN(*IfElseListIter)->index);
+    currentNode=nodeIter->second;
+  
+    if(GET_CODE(currentNode->insn)== JUMP_INSN && ! currentNode->isValid){
+
+      /*
+      nestedIfElseFlag =0 mean no nesten IF_THEN_ELSE
+      nestedIfElseFlag = 1 mean we have only in IF BASic Block nested IF_THEN_ELSE
+      nestedIfElseFlag =10  mean we have only in else BASic Block nested IF_THEN_ELSE
+      nestedIfElseFlag =11  mean we have  in both if/else BASic Block nested IF_THEN_ELSE
+      */
+      int nestedIfElseFlag = has_nested_if_then_else(currentNode->insn);
+
+      /* if no nested if_then_else */
+      if(nestedIfElseFlag==0){
+    
+        doneIter= std::find(doneIfElseList.begin(), doneIfElseList.end(), currentNode->id);
+        /* if this node dosent done yet */
+        if (doneIter == doneIfElseList.end()){
+
+          /* find else and if Basick blocks indxes and push them to the node */
+          if (currentNode->if_bb_index != -1){
+            jump_insn = find_jump_insn(currentNode->if_bb_index);
+            if(jump_insn != NULL){
+              jump_dest = getJumpDestBBindex(jump_insn);
+              currentNode->exit_bb_index=jump_dest;
+              currentNode->isValid=true;
+            }
+         
+          }
+
+          if ((currentNode->else_bb_index != -1 )&&(currentNode->exit_bb_index == -1)){
+              jump_insn = find_jump_insn(currentNode->else_bb_index);
+              if(jump_insn != NULL){
+                jump_dest = getJumpDestBBindex(jump_insn);
+                currentNode->exit_bb_index=jump_dest;
+                currentNode->isValid=true;
+              }
+         
+          }
+
+          /* if the insn IF and not IF_THEN_ELSE */
+          if(currentNode->exit_bb_index == -1)
+            currentNode->exit_bb_index=currentNode->else_bb_index;
+          /* Mark as valid and done */
+          currentNode->isValid=true;
+          doneIfElseList.push_back(currentNode->id);
+
+          /* add to ExitBBtoIfElseBBMap MAP*/
+          ExitBBtoIfElseBBMap.insert (std::pair<int, if_then_else_node*>(currentNode->exit_bb_index,currentNode)); 
+
+       
+      
+
+        }
+      }
+
+
+
+    }
+  }
+}
+
+static void
+intilize_uidToInsnMap()
+{
+std::map<int,basic_block>& bbIndexToBBmap= GetTableBB();
+std::map<int,rtx_insn*>& uidToInsnMap=GetTableInsn();
+basic_block bb;
+std::map<int,basic_block>::iterator kh_iter;
+rtx_insn *insn;
+int id;
+  FOR_EACH_BB_FN (bb, cfun)
+  {
+    basic_block newbb=bb;
+    //kh_iter=bbIndexToBBmap.find(bb->index);
+    /* if not exist in the map*/
+    //if(kh_iter == bbIndexToBBmap.end())
+      bbIndexToBBmap.insert (std::pair<int, basic_block >(newbb->index,newbb));
+    FOR_BB_INSNS (bb, insn)
+    {
+      id=INSN_UID(insn);
+      uidToInsnMap.insert (std::pair<int, rtx_insn* >(id,insn));
+    }
+  }
+}
+
+static bool
+insn_is_removable(insns_to_value* node){
+  rtx dest;
+  machine_mode mode;
+  int modeMaxValue;
+
+  if(hasNegativExpr)
+    return false;
+  if(node->code == SET){
+    if(GET_CODE(SET_SRC(node->current_expr ))== ZERO_EXTEND){
+      dest=XEXP(SET_SRC(node->current_expr ),0);
+      mode = GET_MODE(dest);
+      modeMaxValue=getRegMaxValue(mode);
+      /* we currently support code that only use positive values without minus (small-large) */
+      if((modeMaxValue >= node->value )&&(node->value >= 0))
+        return true;
+    }
+    
+  }
+  return false;
+
+}
+static void free_global_data(){
+  std::map<int, if_then_else_node* >& bbToBranch=GetTableIfElseNode();
+  std::map<int, if_then_else_node*>& ExitBBtoIfElseBBMap = GetTableExitBBtoIfElseBBMap();
+  std::map<int, if_then_else_node* >::iterator nodeIter;
+
+  /*free bbToBranch*/
+  for(nodeIter = bbToBranch.begin(); nodeIter!=bbToBranch.end();++nodeIter)
+  {
+    nodeIter->second=NULL;
+    free(nodeIter->second);
+  }
+  bbToBranch.clear();
+
+  /*free ExitBBtoIfElseBBMap*/
+  for(nodeIter = ExitBBtoIfElseBBMap.begin(); nodeIter!=ExitBBtoIfElseBBMap.end();++nodeIter)
+    if(nodeIter->second != NULL){
+      nodeIter->second=NULL;
+      free(nodeIter->second);
+    }
+  ExitBBtoIfElseBBMap.clear();
+
+  /*clear g_list_visited_insns*/
+  g_list_visited_insns.clear();
+  /* clear uidToInsnMap*/
+  uidToInsnMap.clear();
+  /* clear bbIndexToBBmap */
+  bbIndexToBBmap.clear();
+  /* clear insn_defs */
+  insn_defs.truncate (0);
+
+
+
+}
+/* 
+ input : insn
+ output: calculate insn value or max value that the insn could have and return true if the insn is removable*/
+static bool 
+insn_is_reachable_and_removable(rtx_insn *curr_insn){
+  bool is_removable;
+  std::map<int, if_then_else_node* >& bbToBranch=GetTableIfElseNode();
+  std::map<int,rtx_insn*>& uidToInsnMap=GetTableInsn();
+  std::map<int,basic_block>& bbIndexToBBmap= GetTableBB();
+  std::list<int>::iterator opvlistIter;
+
+
   std::stack<insns_to_value*> stack;
   insns_to_value *currentNode;
+  /* Reset Global Maps */
+  hasNegativExpr=false;
+  bbToBranch=std::map<int, if_then_else_node* >();
+  uidToInsnMap= std::map<int,rtx_insn*>();
+  bbIndexToBBmap=std::map<int,basic_block>();
+  bbToBranch.clear();
+  uidToInsnMap.clear();
+  bbIndexToBBmap.clear();
+/* building data structure for if-then-else jump_insns */
+  intilize_uidToInsnMap();
+  save_if_then_else_data();
 
+  /*each node visted two times
+   first time we put to the stack here sons (sub insns)
+   we we visit it second time means here sons have valid value the we can calc here value
+   when stack is empty mean we calculate all here sons and we calculte here value*/
   stack.push(build_insn_to_value_node(curr_insn, NULL, 0, NULL, D_BTM_INSN));
   while(!stack.empty())
   {
@@ -1682,13 +2470,38 @@ find_insns_value(rtx_insn *curr_insn){
     }
     else
     {
+      /*we dont have value range (lower/uper bound) yet so if there non constant expression that have or could
+       have negative value we will not remove the zero extend becouse we cannot valuate the range yet*/
+      if((currentNode->operands_value.size()>1)&&(currentNode->value <0))
+        hasNegativExpr=true;
+      /*if current insn is reg that could have more than one value (i.e use-def)*/
+      if((currentNode->code == REG)&&(currentNode->operands_value.size()>1))
+      {
+        for(opvlistIter = currentNode->operands_value.begin(); opvlistIter != currentNode->operands_value.end(); ++opvlistIter ){
+          if( (*opvlistIter) < 0){
+            hasNegativExpr=true;
+            break;
+          }
+        }
+
+      }
+      
+      /*free node and pop it*/
+      currentNode->operands_value.clear();
+      free(currentNode);
       stack.pop();
     }
 
   }
+
+  is_removable=insn_is_removable(currentNode);
+  /*free global data*/
+  free_global_data();
+ 
+
   /*first insns visited twice means it have valid value.
    (the only way to pop node from stack to visit the node twice)*/
-  return currentNode->value;
+  return is_removable;
 }
 
 
@@ -1713,11 +2526,13 @@ combine_reaching_defs (ext_cand *cand, const_rtx set_pat, ext_state *state)
 
   state->defs_list.truncate (0);
   state->copies_list.truncate (0);
-
+ 
   outcome = make_defs_and_copies_lists (cand->insn, set_pat, state);
 
   if (!outcome)
     return false;
+  if(insn_is_reachable_and_removable(cand->insn))
+    return true;
 
   /* If the destination operand of the extension is a different
      register than the source operand, then additional restrictions
@@ -1785,7 +2600,6 @@ combine_reaching_defs (ext_cand *cand, const_rtx set_pat, ext_state *state)
 
 
 //int destval=find_data_source(cand->insn);
-  int destval=find_insns_value(cand->insn);
 
       /* The defining statement and candidate insn must be in the same block.
    This is merely to keep the test for safety and updating the insn
