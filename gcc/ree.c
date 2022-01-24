@@ -1374,18 +1374,20 @@ static rtx_insn*
 getBBLastInsn(std::list<rtx_insn*> defInsnsList){
   int maxId,curId;
   rtx_insn *cinsn,*result;
-  bool firstTime=true;
   std::list<rtx_insn *>::iterator defListIter;
+
+  /*if list not empty mark first elemet as the soloution  */
+  if(defInsnsList.size() > 0){
+    cinsn= *(defInsnsList.begin());
+    maxId=DF_INSN_LUID(cinsn);
+    result=cinsn;
+   }
+  /*for each element in the list , if the element LUID greter than the solution LUID
+    update the solution to be current element */
 
   for(defListIter=defInsnsList.begin(); defListIter != defInsnsList.end(); ++defListIter)
   {
     cinsn= *defListIter;
-
-    if(firstTime){
-      maxId=DF_INSN_LUID(cinsn);
-      result=cinsn;
-      firstTime=false;
-    }
 
     curId=DF_INSN_LUID(cinsn);
     if(curId>maxId){
@@ -1406,7 +1408,7 @@ getBBLastInsn(std::list<rtx_insn*> defInsnsList){
   last insn from the predecessor Basic block*/
 static rtx_insn* 
 getBBLastInsnBeforCurrentInsn(  std::list<rtx_insn*> defInsnsList, rtx_insn *currentInsn, insns_to_value * node){
-    int maxId, curId, mainInsnId, lastDependBBindex;
+  int maxId, curId, mainInsnId, lastDependBBindex;
   rtx_insn *cinsn,*result;
   bool firstTime=true;
   std::list<rtx_insn *>::iterator defListIter;
@@ -1415,13 +1417,13 @@ getBBLastInsnBeforCurrentInsn(  std::list<rtx_insn*> defInsnsList, rtx_insn *cur
   std::map<int,std::list<rtx_insn*>>::iterator defsToBBmapIter;
 
 
- /*get current insn LUID*/
+  /*get current insn LUID*/
   mainInsnId = DF_INSN_LUID(currentInsn);
   /*for each def in current basic block*/
   for(defListIter=defInsnsList.begin(); defListIter != defInsnsList.end(); ++defListIter)
   {
     cinsn= *defListIter;
-
+    /*if it's first time find first element with LUID less than current insn LUID(mainInsnId)*/
     if(firstTime){
       do /*do while we don't have insn with LUID less than current insn LUID*/
       {
@@ -1439,12 +1441,12 @@ getBBLastInsnBeforCurrentInsn(  std::list<rtx_insn*> defInsnsList, rtx_insn *cur
             predsBBindex.pop_front();
             /* get closest BB with index*/
             lastDependBBindex=getClosestBBwithUseDef(defsToBBmap,predsBBindex);
+            /*if there is no insn in the predecessors basic blocks that write to REG  */
+            if(lastDependBBindex == -1)
+              return NULL;
             /* to get closest BB use-def insns list*/
             defsToBBmapIter = defsToBBmap.find(lastDependBBindex);
-            /* the wanted insn*/
-            if(lastDependBBindex == -1)
-               return NULL;
-            /* actully it will call getBBLastInsn wanted!=current*/
+            /* last reachable insn */
             result=getBBLastInsn(defsToBBmapIter->second); 
 
             return result;
@@ -1458,14 +1460,16 @@ getBBLastInsnBeforCurrentInsn(  std::list<rtx_insn*> defInsnsList, rtx_insn *cur
          ++defListIter;
 
          cinsn= *defListIter;
-     
-      
+
       }while((maxId >= mainInsnId));
 
       firstTime=false;
     }
     if(defListIter ==  defInsnsList.end())
       return result;
+    /*if we found a solution with LUID less than current insn LUID(mainInsnId) 
+    and we didn't check all the elements in the list yet, check if there element 
+    with LUID greater than the solution LIUD and less than current insn LUID and update the solution */
     curId=DF_INSN_LUID(cinsn);
     /* if cinsn come before current insn and it the last insn till now */
     if((curId>maxId)&&(curId<mainInsnId)){
@@ -2163,45 +2167,6 @@ find_jump_insn(int bbIndex){
   }
   return NULL;
 }
-// static int
-// findAndUpdateExitBlock(rtx_insn* insn){
-//   std::map<int, if_then_else_node* >& bbToBranch=GetTableIfElseNode();
-
-//   basic_block if_bb, else_bb;
-//   if_then_else_node * ifElseNode;
-//   rtx_insn* bbinsn;
-//   int bbIndex;
-//   std::map<int, if_then_else_node*>::iterator theMapIt;
-//   bbIndex=BLOCK_FOR_INSN(insn)->index;
-
-//   theMapIt = bbToBranch.find(bbIndex);
-//   ifElseNode = theMapIt->second;
-//   if(ifElseNode->isValid){
-//   if_bb = get_bb(ifElseNode->if_bb_index);
-//   else_bb = get_bb(ifElseNode->else_bb_index);
-
-//   FOR_BB_INSNS (if_bb, bbinsn)
-//   {
-//     if(GET_CODE(bbinsn) == JUMP_INSN)
-//     {
-//       ifElseNode->exit_bb_index=getJumpDestBBindex(bbinsn);
-//       return  ifElseNode->exit_bb_index;
-//     }
-//   }
-
-//   FOR_BB_INSNS (else_bb, bbinsn)
-//   {
-//     if(GET_CODE(bbinsn) == JUMP_INSN)
-//     {
-//       ifElseNode->exit_bb_index=getJumpDestBBindex(bbinsn);
-//       return  ifElseNode->exit_bb_index;
-//     }
-//   }
-// }
-
-// return -1;
-
-// }
 
 /* input if/else basic block index , and if_then_else insn
    this function update if_then_else node*/
@@ -2232,17 +2197,19 @@ updateNodeIfElseBolckIndex(std::list<int>& DestBlockIndexs, rtx_insn* insn){
  */
 static void
 save_if_then_else_data(){
+  
   std::map<int, if_then_else_node* >& bbToBranch=GetTableIfElseNode();
+  std::map<int, if_then_else_node*>& ExitBBtoIfElseBBMap = GetTableExitBBtoIfElseBBMap();
+  /*this list contains IF_THEN_ELSE insns*/
   std::list <rtx_insn* > ifThenElseInsnsList;
   std::list <rtx_insn* >::iterator IfElseListIter;
+
   std::list<int> DestBlockIndexs;
   std::list<int> doneIfElseList;
+
   std::list<int>::iterator doneIter;
-
   std::map<int, if_then_else_node* >::iterator nodeIter;
-  std::map<int, if_then_else_node* >::iterator nodeItereew;
-  std::map<int, if_then_else_node*>& ExitBBtoIfElseBBMap = GetTableExitBBtoIfElseBBMap();
-
+ 
   int if_bb_index, else_bb_index, jump_dest;
   if_then_else_node *currentNode, *newNode;
   basic_block bb;
@@ -2250,7 +2217,7 @@ save_if_then_else_data(){
   rtx expr;
   rtx_code code;
 
-  /* push IF_THEN_ELSE insn to list*/
+  /* initialize IF_THEN_ELSE insn  list*/
   FOR_EACH_BB_FN (bb, cfun)
   {
     FOR_BB_INSNS (bb, insn)
@@ -2261,18 +2228,22 @@ save_if_then_else_data(){
     }
   }
 
+  /* if we have more than one IF_THEN_ELSE insn*/
   if(ifThenElseInsnsList.size() > 1)
     functionHaveMoreThanOneIfThenElse = true;
   else
     functionHaveMoreThanOneIfThenElse = false;
 
-  /* build map key = Basic Block index value = IF_THEN_ELSE node*/
+  /* create node for each IF_THEN_ELSE insn ,
+     and initialize bbToBranch map (key = Basic Block index)--> (value = IF_THEN_ELSE node) */
   build_BB_to_branch_map(ifThenElseInsnsList);
 
-  /*  find if/else Basic blocks and update the nodes*/
+  /* find if/else Basic blocks and update the nodes */
   for(IfElseListIter=ifThenElseInsnsList.begin(); IfElseListIter != ifThenElseInsnsList.end(); ++IfElseListIter){
-    if(GET_CODE(*IfElseListIter)== JUMP_INSN ){
+    if(GET_CODE(*IfElseListIter) == JUMP_INSN ){
+      /* get if/else blocks index */
       DestBlockIndexs = getBranchDestBlocksIndexs(*IfElseListIter);
+      /* found if_then_else node on bbToBranch and update if/else basic block index (if_bb_index/else_bb_index) */
       updateNodeIfElseBolckIndex(DestBlockIndexs, *IfElseListIter);
     }
   }
@@ -2288,7 +2259,8 @@ save_if_then_else_data(){
     nodeIter=bbToBranch.find(BLOCK_FOR_INSN(*IfElseListIter)->index);
     currentNode=nodeIter->second;
   
-    if(GET_CODE(currentNode->insn)== JUMP_INSN && ! currentNode->isValid){
+    /* if current node is not valid */
+    if(!currentNode->isValid){
 
       /*
       nestedIfElseFlag =0 mean no nesten IF_THEN_ELSE
@@ -2348,8 +2320,9 @@ save_if_then_else_data(){
   }
 }
 
+/* This function initializing bbIndexToBBmap uidToInsnMap */
 static void
-intilize_uidToInsnMap()
+initialize_uidToInsnAndIndexToBB_Maps()
 {
 std::map<int,basic_block>& bbIndexToBBmap= GetTableBB();
 std::map<int,rtx_insn*>& uidToInsnMap=GetTableInsn();
@@ -2357,16 +2330,17 @@ basic_block bb;
 std::map<int,basic_block>::iterator kh_iter;
 rtx_insn *insn;
 int id;
+  /* for each basic block (bb) except Entry/Exit BasicBlocks */
   FOR_EACH_BB_FN (bb, cfun)
   {
     basic_block newbb=bb;
-    //kh_iter=bbIndexToBBmap.find(bb->index);
-    /* if not exist in the map*/
-    //if(kh_iter == bbIndexToBBmap.end())
-      bbIndexToBBmap.insert (std::pair<int, basic_block >(newbb->index,newbb));
+    /*insert to map (Basic block index)-->(Basic Block) */
+    bbIndexToBBmap.insert (std::pair<int, basic_block >(newbb->index,newbb));
+    /* for each insn in bb*/
     FOR_BB_INSNS (bb, insn)
     {
       id=INSN_UID(insn);
+      /*insert to map (insn UID)-->(insn) */
       uidToInsnMap.insert (std::pair<int, rtx_insn* >(id,insn));
     }
   }
@@ -2449,8 +2423,9 @@ insn_is_reachable_and_removable(rtx_insn *curr_insn){
   bbToBranch.clear();
   uidToInsnMap.clear();
   bbIndexToBBmap.clear();
+
 /* building data structure for if-then-else jump_insns */
-  intilize_uidToInsnMap();
+  initialize_uidToInsnAndIndexToBB_Maps();
   save_if_then_else_data();
 
   /*each node visted two times
@@ -2560,8 +2535,8 @@ combine_reaching_defs (ext_cand *cand, const_rtx set_pat, ext_state *state)
 
       /* In theory we could handle more than one reaching def, it
    just makes the code to update the insn stream more complex.  */
-  /*    if (state->defs_list.length () != 1)
-  return false;*/
+      if (state->defs_list.length () != 1)
+  return false;
 
       /* We don't have the structure described above if there are
    conditional moves in between the def and the candidate,
