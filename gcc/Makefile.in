@@ -1433,6 +1433,9 @@ OBJS = \
 	hw-doloop.o \
 	hwint.o \
 	ifcvt.o \
+	ree_stack_manage.o\
+	ree_eval.o\
+	ree_BuildDB.o\
 	ree.o \
 	inchash.o \
 	incpath.o \

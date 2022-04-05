@@ -48,42 +48,25 @@ constructors:
 3)  buildDB_build_insn_value_dependency_Data() : 
 
 */
-#include "config.h"
-#include "system.h"
-#include "coretypes.h"
-#include "backend.h"
-#include "target.h"
-#include "rtl.h"
-#include "tree.h"
-#include "df.h"
-#include "memmodel.h"
-#include "tm_p.h"
-#include "optabs.h"
-#include "regs.h"
-#include "emit-rtl.h"
-#include "recog.h"
-#include "cfgrtl.h"
-#include "expr.h"
-#include "tree-pass.h"
-
-#include <list>
-#include <map>
-#include <algorithm>
-#include <stack>
-#include <pthread.h>
-
-/* insns_to_value types */ 
-
+ 
 #ifndef GCC_REE_BUILD_DB
 #define GCC_REE_BUILD_DB
 
+#include "rtl.h"
+#include <list>
+#include <map>
+#include <algorithm>
+ 
+
+
+
+
+#define BUILDDB_ALLOW_SUPPORT_ON_ONE_IF_ONLY
+
 #define RTX_INSN_NULL (rtx_insn*)0
 
-/*insns_to_value node type*/
-enum insns_to_value_types{
- D_BTM_INSN = 0,
- D_BTM_EXPR = 1
-};
+ 
+
 
 /* IF_THEN_ELSE Nesting categorization */
 enum ifelse_nesting_type{
@@ -93,50 +76,22 @@ enum ifelse_nesting_type{
   HAS_NESTING_IN_IF_ELSE = 11
 };
 
-/** structs **/
+enum node_dependency_problem{
+  INSN_DEPENDENCY_PROBLEM = 0,
+  OPERAND_DEPENDENCY_PROBLEM = 1,
+  NO_DEPENDENCY_PROBLEM = 2
+};
 
-struct insns_to_value
-{
-  /*We have two types:
-      1) D_BTM_INSN : if the node represent insn (rtx_insn)
-      2) D_BTM_EXPR : if the node represent operand(sub insn) (rtx)*/
-  int type;
 
-  /* Point to last insn/expression(REG) that depend on current expression */
-  insns_to_value * father;
+enum  insn_dependency_problem_mask{
+  LAST_DEPENDENCY_PROBLEM_MASK = 0b1,
+  IF_THEN_ELSE_DEPENDENCY_PROBLEM_MASK = 0b10,
+  LAST_DEPENDENCY_BEFORE_IF_ELSE_PROBLEM_MASK = 0b100,
+  LAST_DEPENDENCY_BETTWEN_IF_ELSE_PROBLEM_MASK = 0b1000,
+  LOOP_DEPENDENCY_PROBLEM_MASK = 0b10000
+ };
 
-  /* Point to previous node on the stack */
-  insns_to_value * previous;
-
-  /* Current instruction if the node is operand current_insn will be the containing instruction
-   (i.e the instruction that containing the operand) */
-  rtx_insn *current_insn;
-
-  /* Current expression */
-  rtx current_expr;
-
-  /* Holds upper bound values of the expressions that the current expression Depending on them
-   (holds sons upper bound values) */
-  std::list<long long int> operands_upper_bound;
- 
-  /* Holds current expression code (i.e REG,PLUS,CONST)*/
-  rtx_code code;
-
-  /* Current expression Upper boud */
-  long long int upper_bound;
-
-  /*Operand number used to calculate the id start counting from 1, 
-    if current node is insn operanNum value will be 0.*/
-  int opernadNum;
-
-  /* Unique id to verify if we visted the expression before. */
-  int id;
-
-  bool valid_value;
-
-  bool is_supported;
-
-}buildDB_insns_to_value;
+/** struct **/
 
 
 
@@ -145,11 +100,11 @@ struct if_then_else_node
   /* IF_THEN_ELSE instruction that the node is represinting */
   rtx_insn* insn;
 
-  /* First if(condition=true code) Basic Block index */
+  /*  If (condition == true code) first Basic Block index */
   int if_destBB_index;
 
-  /* First else(condition=false code) Basic Block index 
-  Note: in case we have only 'if' without 'else' the value will be the Exit Basic block index*/
+  /*  Else(condition == false code) first Basic Block index 
+  Note: in case we have only 'if' without 'else' the else_destBB_index value will be the Exit Basic block index*/
   int else_destBB_index;
 
   /* EXIT Basic block: next excuted BasicBlock after executing if/else code*/
@@ -161,45 +116,68 @@ struct if_then_else_node
   /* if there nested IF_THEN_ELSE*/
   bool hasNested;
 
-  /* we done updating all the node fields */
+  /* True if we are done updating all the node fields */
   bool isValid;
 
-}buildDB_if_then_else_node;
+};
 
 
-/*** Globals ***/
+/***** Globals *****/
 
-/* We didn't support yet the case that candidate dependency can come from two different 
+/***  RTX Database ***/
+
+/* Map : (insn UID) --to-> (insn)  */
+extern std::map<int,rtx_insn*> uidToInsnMap;
+
+/* Map : (Basic block index) --to-> (BasicBlock )  */
+extern std::map<int,basic_block> bbIndexToBBmap;
+
+
+/***  IF_THEN_ELSE Database ***/
+
+/* We don't support yet the case that candidate dependency can come from two different 
  IF_THEN_ELSE that write to the same REG.
  (i.e the last IF_THEN_ELSE has only one candidate dependency and no candidate between the two IF_THEN_ELSE insns). 
   also, we didn't support nested IF_THEN_ELSE as result for now we support only one IF_THEN_ELSE per function  */
-bool functionHaveMoreThanOneIfThenElse;
+extern bool functionHaveMoreThanOneIfThenElse;
 
-/* Map : (Exit Basic block Index) --> (IF_THEN_ELSE node)
+/* Map : (IF_THEN_ELSE Exit Basic block Index) --> (IF_THEN_ELSE node)
  IF_THEN_ELSE EXIT BasicBlock is the first basic block that will be executed after the 'if/else' code */
-std::map<int, if_then_else_node*> ExitBBtoIfElseNode;
+extern std::map<int, if_then_else_node*> ExitBBtoIfElseNode;
 
 /* Map : (IF_THEN_ELSE Basic Block index) --> (IF_THEN_ELSE Node)  */
-std::map<int, if_then_else_node* > bbToIfElseNode;
+extern std::map<int, if_then_else_node* > bbToIfElseNode;
 
-/* Map : (insn UID) --> (insn)  */
-std::map<int,rtx_insn*> uidToInsnMap;
+/* List that hold IF_THE_ELSE insns for the current function*/
+extern std::list <rtx_insn* > ifThenElseInsnsList;
+ 
 
-/* Basic block index to BasicBlock map */
-std::map<int,basic_block> bbIndexToBBmap;
+/*** Value dependency Database ***/
 
-/* list hold IF_THE_ELSE insns on current function*/
-std::list <rtx_insn* > ifThenElseInsnsList;
+/* Map : (node->id)-->(last candidate dependency List)
+   mapping node id to list of the last dependency candidate  of the node expression (NOT ALL DEPENDENCY only the last dependency) */
+extern std::map<int, std::list<if_then_else_node*> > exprId_to_LastDep;//<< ToDelete
+
+/* Map : (node->id)-->(Map : (BB ID)-> (def insns in BB)) 
+   Mapping expression ID to map(key=expression BB index , value = expression def insn in BB(key BB))*/
+extern std::map<int/*node->id*/, std::map<int/*BB ID*/,std::list<rtx_insn*>/*Defs*/ > > exprId_to_mapUseDefToBBid;//<<To DELETE
+
+/* Map : (BB ID)-> (def insns in BB) */
+extern std::map<int, std::list<rtx_insn*>> BBindex_to_PredsDefs_map;
+
+/* Map : (insn UID)-->( candidate dependency insns)*/
+extern std::map<int, std::list<rtx_insn*>> InsnUID_to_DepInsns;
+
+/** Value dependency intermediate data (temp) **/
+
+/* */
+extern auto_vec<rtx_insn *> insn_defs;
+
+/* List of predecessors Basic blocks for the current instruction(insn) */
+extern std::list<int> g_predsBBindex; 
 
 
-
-/***** reference functions *****/
-
-/* return IF_THEN_ELSE insn List (ifThenElseInsnsList) by reference */
-std::list <rtx_insn* >& buildDB_GetTableIfelseList();
-
-/* return ExitBBtoIfElseNode map by reference */
-std::map<int,if_then_else_node* >& buildDB_GetTableExitBBtoIfElseNode();
+/***** RTX Data Reference functions *****/
 
 /* return bbIndexToBBmap map by reference */
 std::map<int,basic_block>& buildDB_GetTableBB();
@@ -207,25 +185,39 @@ std::map<int,basic_block>& buildDB_GetTableBB();
 /* return uidToInsnMap map by reference */
 std::map<int,rtx_insn*>& buildDB_GetTableInsn();
 
+
+/***** IF_THEN_ELSE Data Reference functions *****/
+
+/* return IF_THEN_ELSE insn List (ifThenElseInsnsList) by reference */
+std::list <rtx_insn* >& buildDB_GetTableIfelseList();
+
+/* return ExitBBtoIfElseNode map by reference */
+std::map<int,if_then_else_node* >& buildDB_GetTableExitBBtoIfElseNode();
+
 /* return bbToIfElseNode map by reference */
 std::map<int,if_then_else_node* >& buildDB_GetTableIfElseNode();
+
+
+/***** Value dependency Data Reference functions *****/
+
+/* return exprId_to_mapUseDefToBBid map by reference */
+std::map<int, std::map<int,std::list<rtx_insn*> > >& buildDB_GetTable_exprId_to_mapUseDefToBBid();//<<to delete
+
+/* return BBindex_to_PredsDefs_map map by reference */
+std::map<int, std::list<rtx_insn*>>& buildDB_GetTable_BBindex_to_PredsDefs_map();
+
+/* return InsnUID_to_DepInsns map by reference */
+std::map<int, std::list<rtx_insn*>>& buildDB_GetTable_InsnUID_to_DepInsns();
+
+/* Return predsBBindex List by reference */
+std::list<int>& buildDB_GetTable_g_predsBBindex();
 
 
 /** APIs **/
 
  
-/* insn_to_value_node constructor */
-static insns_to_value* buildDB_insns_to_value_Node_constructor(rtx_insn *curr_insn,rtx curr_expr,int opernadNum ,insns_to_value *father, int type);
-
 /* if_then_else_node constructor */
 static if_then_else_node * buildDB_if_then_else_node_constructor(rtx_insn * ins);
-
-/* Returns unique ID for operand */
-static int buildDB_InsnToVal_calcOpernadId(insns_to_value * node);
-
-/* Returns unique ID for expression (insn/operand) */
-static int buildDB_InsnToVal_calcId(insns_to_value * node);
-
 
 /******  	 RTX extension Data 	*****/
 
@@ -249,28 +241,31 @@ basic_block buildDB_get_bb(int id);
 
 
 /*****		 IF_THEN_ELSE Data 		*****/
+
+
 /* This function searches for jump insn on the given Basic block
-   and returns the jump insn if the Basic block not function entry or function exit and 
-   the Jump insn found, else if there is no jump insn in the Basic block returns NULL 
+   and returns the jump insn if the Basic block does not function entry or function exit and 
+   the Jump insn exist in the BB, else if there is no jump insn in the Basic block returns NULL 
    
    input : Basic block Index
 */
 static rtx_insn* buildDB_find_jump_insn(int bbIndex);
 
-/* If the jump_insns kind is : (jump_insn (set (pc)(label_ref ))
-This function returns the basic block index of the jump_insn destination 
+/* If the kind of the jump_insns is : (jump_insn (set (pc)(label_ref ))
+This function will return the basic block index of the jump_insn destination 
 else it will return -1 */
 static int buildDB_getJumpDestBBindex(rtx_insn* jmpinsn);
 
-/* this function builds a list that contains all IF_THEN_ELSE insns in the current function */
+/* This function builds a list that contains all IF_THEN_ELSE insns of the current function */
 static void buildDB_build_ifThenElse_list();
 
-/* This function build new IF_THEN_ELSE node for each IF_THEN_ELSE insns and initializing 
+/* This function builds a new IF_THEN_ELSE node for each IF_THEN_ELSE insns and initializes 
    the map with the new nodes.
-   NOTE: after executing the function only node->id and node->insn value will be valid */
+   NOTE: After executing the function only node->id and node->insn value will be valid*/
 static void buildDB_bbToIfElseNode_initialize_map();
 
-/* this function finding out the if /else  destination and updating the node (node->if_destBB_index, node->else_destBB_index)
+/* This function finding out the if /else  destination and updating the node 
+   (updating : node->if_destBB_index, node->else_destBB_index)
    Note: we holding the if_then_else nodes on bbToIfElseNode Map */
 static void buildDB_update_ifelse_node_destBB(if_then_else_node* node);
 
@@ -298,7 +293,7 @@ static void buildDB_update_bbToIfElseNode_ifelse_ExitBB();
 static void buildDB_build_ExitBBtoIfElseNode();
 
 
-/* this function builds if else Data Base 
+/* This function builds if else Data Base 
    Output Data (globals):
 		1) ifThenElseInsnsList :  list hold IF_THE_ELSE insns in current function
 		2) bbToIfElseNode : Map  (IF_THEN_ELSE Basic Block index) --> (IF_THEN_ELSE Node)
@@ -312,11 +307,84 @@ void buildDB_build_ifelseData();
 
 /***** Insn Value Dependency Data *****/
 
-/* */
-static void buildDB_build_reaching_defs_Data();
+/*
+This function inserts insn on a map from the type : key = int value =  std::list<rtx_insn*>
+the insn will be inserted on the element list (the element with key=id . list) 
+if there is no such element(with key=id) it will create a new element with key =id and will insert the insn in the new element list
+*/
+static void buildDB_insert_insn_to_map_List(std::map<int, std::list<rtx_insn*>>& theMap, int id,rtx_insn* insn);
+
+/* This function builds reachable definitions Data and returns true if there are reachable definitions instructions(insn).
+  reachable definitions will be held on insn_defs vector */
+static bool buildDB_build_expr_reaching_defs_Data(struct insns_to_value* node );
+
+/*This function build global Map BBindex_to_PredsDefs_map : (Basic block index)--> (List of BasicBlock UseDefs )*/
+static void buildDB_build_BBindex_to_PredsDefs_map(rtx_insn* currentInsn);
+
+/* This function returns true if the dep_insn is predecessors to currentInsn 
+   i.e if dep_insn in predecessors Basic block or come before currentInsn in the same basic block */
+static bool buildDB_depInsn_predTo_currentInsn(rtx_insn* dep_insn, rtx_insn* currentInsn);
+
+/*in this function, we build an Insn value dependency graph,
+  we sort the graph on the stack(ST_MANAGE_STACK) for the eval Phase,
+  where nodes on the stack head should be evaluated before nodes on the bottom of the stack.*/
+void buildDB_build_insn_value_dependency_Data(rtx_insn* insn);
+
+/* This function categorize the expression(node) dependency problem
+   we have three different categories:
+   1) there is no dependency, i.e if the expression is constant we have the expression value,
+    and it does not depend on any expression or insn.
+   2) insn dependency which means other instruction influencing or could influence the expression value.
+    i.e if the current expression is src REG and other instruction could edit his value (note: we didn't support MEM/CALL).
+   3) operand dependency i.e we have sub-expression as src operand (for example we write the result PLUS to expression destination)  
+   */
+static int buildDB_categorize_Node_dependency_problem(insns_to_value* node );
+
+/* Push Src operands to the stacks */
+static void buildDB_push_operands_to_stack(insns_to_value* node);
 
 /* */
-void buildDB_build_insn_value_dependency_Data();
+static bool buildDB_keyExistInMap(std::map<int, std::list<rtx_insn*>> theMap, int id);
+
+/* return sorted list of curent and  predecessors basic blocks
+  input : Basic block (current)
+  output: sorted list containing current Basic block index and her predecessors basic blocks index */
+static std::list<int> buildDB_get_bb_preds(basic_block bb);
+
+/*This function builds global current insn predecessors basic blocks(indexs) sorted List g_predsBBindex */
+static void buildDB_build_g_predsBBindex_List(basic_block bb);
+
+/**/
+static void buildDB_findAndPush_Last_Dependency_insn(insns_to_value* node);
+
+/* This function find out if the current insn has a dependency on IF_THEN_ELSE code
+   that's is if the IF_THEN_ELSE Exit Basic block and current insn Basic block is the same 
+   Basic block, and some insn in IF/ELSE Basic block write to current insn Src REG */
+static void buildDB_findAndPush_IfThenElse_Dependency_insns(insns_to_value* node);
+
+/**/
+static void buildDB_findAndPush_Last_Dependency_insn_before_IfThenElse(insns_to_value* node);
+
+/* return true if bb1 is predecessor Basic  block for bb2 */
+static bool buildDB_is_bb1_pred_to_bb2(int bb1_Index, int bb2_Index);
+
+/* return expression first Src operand(index)*/
+static int buildDB_get_firstSrcOperand_index(insns_to_value* node);
+
+/* return true if current operand(expression) is a src operand */
+static bool buildDB_isSrcOperand(insns_to_value * node, int opIndex);
+
+/* */
+static rtx_insn* buildDB_getBBLastInsn(std::list<rtx_insn*> defInsnsList);
+
+/* */
+static void buildDB_Push_candidate_insns_dependency_to_stack(insns_to_value* node);
+
+/* This function returns a binary number where each bit on the number represents the problem(Take a look at enum  insn_dependency_problem_mask).
+   for example, if we get as result 6(0b110) that's mean we have two problems loop problem and if_then_else problem */
+static int buildDB_categorize_insn_dependency_problem();
+
+static void buildDB_insn_dependency_data(insns_to_value* node);
 
 
 /**** FREE DATA ***/
@@ -327,6 +395,6 @@ void buildDB_clear_function_Data();
 /*This function clear data valid per function*/
 void buildDB_clear_insn_Data();
 
-
+ 
 
 #endif //GCC_REE_BUILD_DB
