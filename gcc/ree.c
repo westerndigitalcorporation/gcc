@@ -235,8 +235,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "ree_BuildDB.h"
 #include "ree_eval.h"
 
-//extern void buildDB_build_RTX_extension_Data();
-//extern void buildDB_build_ifelseData();
+//extern void buildDB_RTX_extension_Data();
+//extern void buildDB_ifelseData();
 //extern void buildDB_clear_function_Data();
 /* This structure represents a candidate for elimination.  */
 
@@ -780,10 +780,11 @@ combine_reaching_defs (ext_cand *cand, const_rtx set_pat, ext_state *state)
  
 
   outcome = make_defs_and_copies_lists (cand->insn, set_pat, state);
-
+ 
   if (!outcome)
     return false;
 
+  remove_zext = eval_zext_is_reachable_and_removable(cand->insn);
 
   /* If the destination operand of the extension is a different
      register than the source operand, then additional restrictions
@@ -809,34 +810,33 @@ combine_reaching_defs (ext_cand *cand, const_rtx set_pat, ext_state *state)
    (set (reg1) (reg2))
    ...  */
 
-#ifdef WITH_NEW_IQ_REE
+//#ifdef WITH_NEW_IQ_REE
 if (dump_file)
             fprintf (dump_file, "Ibrahim Reeeeeeeeeee \n ");
-buildDB_build_RTX_extension_Data();
-buildDB_build_ifelseData();
-buildDB_build_insn_value_dependency_Data(cand->insn);
-
+//db_rtx_extension_data();
+//db_build_ifelse_data();
+//db_value_dependency_graph(cand->insn);
+ 
 /*bool=eval<<<*/
-remove_zext = eval_zext_is_reachable_and_removable();
+ 
+//db_clear_insn_Data();
+//db_clear_function_Data();
 
-buildDB_clear_insn_Data();
-buildDB_clear_function_Data();
 
-/*retrun bool <<<*/
-if(remove_zext)
-  return true;
-#endif
+//#endif
 
       /* In theory we could handle more than one reaching def, it
    just makes the code to update the insn stream more complex.  */
       if (state->defs_list.length () != 1)
-  return false;
+       // if(!remove_zext)
+          return false;
 
       /* We don't have the structure described above if there are
    conditional moves in between the def and the candidate,
    and we will not handle them correctly.  See PR68194.  */
       if (state->copies_list.length () > 0)
-  return false;
+        //if(!remove_zext)
+          return false;
 
       /* We require the candidate not already be modified.  It may,
    for example have been changed from a (sign_extend (reg))
@@ -846,8 +846,9 @@ if(remove_zext)
    here and the code to emit copies would need auditing.  Until
    we see a need, this is the safe thing to do.  */
       if (state->modified[INSN_UID (cand->insn)].kind != EXT_MODIFIED_NONE)
-  return false;
-
+        //if(!remove_zext)
+          return false;
+ 
       machine_mode dst_mode = GET_MODE (SET_DEST (set));
       rtx src_reg = get_extended_src_reg (SET_SRC (set));
 
@@ -874,19 +875,22 @@ if(remove_zext)
       basic_block bb = BLOCK_FOR_INSN (cand->insn);
       if (bb != BLOCK_FOR_INSN (def_insn)
     || DF_INSN_LUID (def_insn) > DF_INSN_LUID (cand->insn))
-  return false;
-
+       // if(!remove_zext)
+          return false;
+ 
       /* If there is an overlap between the destination of DEF_INSN and
    CAND->insn, then this transformation is not safe.  Note we have
    to test in the widened mode.  */
       rtx *dest_sub_rtx = get_sub_rtx (def_insn);
       if (dest_sub_rtx == NULL)
-  return false;
+      //  if(!remove_zext)
+          return false;/* Need a check not sure*/
 
       rtx tmp_reg = gen_rtx_REG (GET_MODE (SET_DEST (set)),
          REGNO (SET_DEST (*dest_sub_rtx)));
       if (reg_overlap_mentioned_p (tmp_reg, SET_DEST (set)))
-  return false;
+       // if(!remove_zext)
+          return false;/* Need a check not sure*/
 
       /* On RISC machines we must make sure that changing the mode of SRC_REG
    as destination register will not affect its reaching uses, which may
@@ -903,14 +907,14 @@ if(remove_zext)
     for (df_link *use = uses; use; use = use->next)
       if (paradoxical_subreg_p (GET_MODE (*DF_REF_LOC (use->ref)),
               GET_MODE (SET_DEST (*dest_sub_rtx))))
-        return false;
+      return false;/* Need a check not sure*/
   }
 
       /* The destination register of the extension insn must not be
    used or set between the def_insn and cand->insn exclusive.  */
       if (reg_used_between_p (SET_DEST (set), def_insn, cand->insn)
     || reg_set_between_p (SET_DEST (set), def_insn, cand->insn))
-  return false;
+      return false;/* Need a check not sure*/
 
       /* We must be able to copy between the two registers.   Generate,
    recognize and verify constraints of the copy.  Also fail if this
@@ -1009,8 +1013,11 @@ if(remove_zext)
     state->defs_list[0] = def_insn2;
     break;
   }
-    }
+    }//end of copy
 
+  if(remove_zext)
+    return true;
+  
   /* If cand->insn has been already modified, update cand->mode to a wider
      mode if possible, or punt.  */
   if (state->modified[INSN_UID (cand->insn)].kind != EXT_MODIFIED_NONE)

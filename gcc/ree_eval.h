@@ -1,6 +1,7 @@
 /**
   
-author :  Ibrahim Qashqoush, Western Digital Corporation (ibrahim.qashqoush@wdc.com) 
+author :  Ibrahim Qashqoush, Western Digital Corporation 
+                                                     (ibrahim.qashqoush@wdc.com) 
 
 This file is part of GCC.
 
@@ -26,85 +27,102 @@ Description:
 */
 #ifndef GCC_REE_EVAL
 #define GCC_REE_EVAL
-/* return the max value that the target machine can handle.
-   for example, if the machine target is 32'bit return the max value that we could have in 32'bit REG */
-#define eval_Machine_word_max_value() ((long long int)pow(2, (UNITS_PER_WORD * 8) - 1 ) - 1); 
+ 
 /* Input bits : number of bits (width) 
-   Output : the maximum value that we can represent on number with bits width */
-#define eval_bits_to_max_BitsWord_value(bits) ((long long int)pow(2, bits ) - 1) 
+   Output : the maximum value that we can represent on number with bits width  */ 
+ 
+#define EVAL_BITS_TO_MAX_BITS_WORD_VALUE(bits) ((machine_x_length)((1 << bits) - 1)) 
+#define GET_MASK(num_of_bits)(EVAL_BITS_TO_MAX_BITS_WORD_VALUE(num_of_bits))
 
 
-enum evaluation_problem
+typedef enum evaluation_type
 {
    REG_EVALUATION = 0,
    CONST_EVALUATION = 1,
    EXPRESSION_EVALUATION = 2
    
-};
+}eval_type;
 
-/* This function return false if we didn't support the expression code */
-//static bool eval_is_code_supported(insns_to_value* node);
 
-/* return mask for first x'bits*/
-static long long int eval_get_x_bit_Mask(int xBits);
 
 /**/
-static long long int eval_max_RegExpr_Value(rtx expr);
+static machine_x_length eval_max_RegExpr_Value(rtx expr);
 
-/**/
-static int eval_Get_Value_Width_In_Bits(long long int value);
+/* input : value  
+   output : If the value length greater than (machine_word_length -1) 
+            the function will return machine_word_length -1
+            else the function will return the value length in bits 
+            (the location of last 1 from LSB i.e if the machine word
+            length 32 and the value = 0x05 the function will return 3)  */
+static int eval_Get_Value_Width_In_Bits(machine_x_length value);
 
 /* return the category of the evaluation problem */
-static int eval_evaluation_problem_category(insns_to_value* node);
+static int eval_category(insns_to_value* node);
 
 /* returns if the expression value is not supported on the current version */
-static bool eval_is_value_not_supported(long long int value);
-
-/* evaluate Const value upper bound */
-static long long int eval_evaluate_const_upper_bound(insns_to_value *node);
+static bool eval_is_value_not_supported(machine_x_length value);
 
 /* evaluate Register value upper bound */
-static long long int eval_evaluate_REG_upper_bound(insns_to_value *node);
+static machine_x_length eval_REG_upper_bound(insns_to_value *node);
 
 /* evaluate math expression value upper bound*/
-static long long int eval_evaluate_expr_upper_bound(insns_to_value *node);
+static machine_x_length eval_expr_upper_bound(insns_to_value *node);
 
-/* The returned value is the node expression upper bound(tight upper bound i.e as small as posible) */
-static long long int eval_evaluate_node_upper_bound(insns_to_value* node);
+/* The returned value is the node expression upper bound
+   (tight upper bound i.e as small as posible)  */
+static machine_x_length eval_node_cumulative_upper_bound(insns_to_value* node);
 
-/**/
-static long long int eval_evaluate_expr_extremum_upper_bound(insns_to_value* node);
+/* This function evaluate the expression extremum Upper bound 
+   By evaluation the maximum number that can fit on the maximum result on bits 
+   that we could have
+   for example: if we have the expression x = y + z 
+   where y = any number with width 4'bits
+         z = any number with width 7'bits
+   x value can't be gretter than the minimum bettwen
+     1) the maximum number with width of 8'bits (7+1)(the result width can't be  
+     more than the width
+      and
+      2) the maximum number that can fit the REG width  */
+static machine_x_length eval_expr_extremum_upper_bound(insns_to_value* node);
 
-/**/
-static long long int  eval_evaluate_REG_extremum_upper_bound(insns_to_value* node);
+/* Evaluate Register extremum upper bound value
+   1)if there is no candidate dependency (use def) on this function
+    the Upper bound will be the max value that can fit on the REG mode
+   2)else the upper bound will be the maximum value bettwen
+     2.1) Maximum dependency Upper bound 
+     and
+     2.2)The max value that can fit on the REG mode (2.1 result) */
+static machine_x_length  eval_REG_extremum_upper_bound(insns_to_value* node);
 
 /* The returned value is the node expression extremum upper bound */
-static long long int eval_evaluate_node_extremum_upper_bound(insns_to_value* node);
+static machine_x_length eval_node_extremum_upper_bound(insns_to_value* node);
 
 /* evaluate node as exremum upper bound if the node part of extremum subgraph
-   else it will evaluate the node upper bound(tight upper bound i.e as small as posible) */
-static long long int eval_evaluate_node(insns_to_value* node);
+   else it will evaluate the node upper bound
+   (tight upper bound i.e as small as posible) */
+static machine_x_length eval_node_upper_bound(insns_to_value* node);
 
 
-/* Updae Node upper bound and push node upper bound to father operands_upper_bound List */
-static void eval_update_upper_bound(insns_to_value* node, long long int value);
+/* This function takes an un-supported expression(node) and marks the path 
+   from the node to the root. each marked node later will be evaluated as the 
+   maximum possible upper bound  */
+static void eval_set_extreme_path_value(insns_to_value* node);
 
-/* This function takes an un-supported expression(node) and marks the path from the node to the root.
-   each marked node later will be evaluated as the maximum possible upper bound*/
-static void eval_mark_extreme_value_path(insns_to_value* node);
-
-/* The function target to evaluate the first insn in the stack (first pushed /last popped)
-   by evaluating insn dependency the dependency graph is sorted in the stack that's is each entry on the stack
-   have all his dependency before it so when element popped from the stack here dependency already evaluated 
+/* The function target to evaluate the first insn in the stack 
+  (first pushed /last popped) by evaluating insn dependency the dependency graph
+  is sorted in the stack that's is each entry on the stack have all his 
+  dependency before it so when element popped from the stack here dependency 
+  already evaluated 
    output: first pushed expression(insn) with updated upper bound  */
-static  insns_to_value* eval_evaluate_insn_value_dependency_stack();
+static  insns_to_value* eval_insn_value();
 
-/* This function evaluate the insn Upper bound (the insn that we give as argument to buildDB_build_insn_value_dependency_Data(rtx_insn*))  
-   and determines if we need the zext Based on the insn upper bound */
-bool eval_zext_is_reachable_and_removable();
+/* This function evaluate the insn Upper bound (the insn that we give as 
+   argument to buildDB_build_insn_value_dependency_Data(rtx_insn*))  
+   and determines if we need the zext Based on the insn upper bound  */
+bool eval_zext_is_reachable_and_removable(rtx_insn* insn);
 
-
-
+/* This function returns the mode length  */
+static int eval_get_mode_length(rtx expr);
 
  
 
