@@ -1349,9 +1349,7 @@ db_insn_dependency_data(insns_to_value* node,ifelse_data *ifelse_data_node,
     dependency_problems = db_categorize_insn_dependency_problem(node,
                                             ifelse_data_node, dependency_db);
 
-	/*  we
-     don't want to support optimization on more than one IF_THEN_ELSE insn
-	   In such case, if we had more the one IF_THEN_ELSE insn on if then else
+	/* if we had more the one IF_THEN_ELSE insn on if then else
      dependency problem we deal with the current REG as un-supported insn
 	   that's is  :
 	   1)  mark the node as not-supported
@@ -1359,7 +1357,10 @@ db_insn_dependency_data(insns_to_value* node,ifelse_data *ifelse_data_node,
 	   3)  put the upper bound to machine word size extremum value
          (as Shortcut we put on the REG operands Upper bound list
 	       element with  machine word size extremum value and on eval the
-         REG value will be machine word size extremum value )  */
+         REG value will be machine word size extremum value )  
+
+         NOTE : we can support more than one if then eles that has no
+                nested if then else  */
       if((dependency_problems & IF_THEN_ELSE_DEPENDENCY_PROBLEM_MASK) ==
                                         IF_THEN_ELSE_DEPENDENCY_PROBLEM_MASK)
       {

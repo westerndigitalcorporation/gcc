@@ -68,12 +68,19 @@ int eval_table[64] = {
      9, 30, 45, 41,  8, 40,  7,  6,
 };
 
-#define EVAL_GET_SET_BIT_INDEX(x) eval_table[((long long int)((x & -x) * EVAL_MAGIC)) >> 58]
- 
+//#define EVAL_GET_SET_BIT_INDEX(x) eval_table[((( __int128)(x & -x) * EVAL_MAGIC)) >> 58]
+ /* this function return first 0 from lsb  */
+ int EVAL_GET_SET_BIT_INDEX(long long int x) {
+
+  unsigned long lsb = (~x) & -(~x);
+  int result =  eval_table[(lsb * EVAL_MAGIC) >> 58] ;
+  if(result == 0)
+     return 64;
+}
 
 /* Returns false if we dont support the value*/
 static bool eval_is_value_not_supported(machine_x_length value)
-{
+{   
   return (value < 0);
 }
 
@@ -365,7 +372,13 @@ static int eval_Get_Value_Width_In_Bits(machine_x_length value)
   if(((~machine_pword_mask) & value) != 0)
     return ((UNITS_PER_WORD * 8) - 1 );
 
-  return EVAL_GET_SET_BIT_INDEX(value);
+  //  return EVAL_GET_SET_BIT_INDEX(value);
+  while(value != 0)
+  {
+    value = value >> 1;
+    bitsCounter++;
+  }
+  return bitsCounter;
 }
 
 

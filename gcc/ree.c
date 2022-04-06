@@ -810,20 +810,7 @@ combine_reaching_defs (ext_cand *cand, const_rtx set_pat, ext_state *state)
    (set (reg1) (reg2))
    ...  */
 
-//#ifdef WITH_NEW_IQ_REE
-if (dump_file)
-            fprintf (dump_file, "Ibrahim Reeeeeeeeeee \n ");
-//db_rtx_extension_data();
-//db_build_ifelse_data();
-//db_value_dependency_graph(cand->insn);
- 
-/*bool=eval<<<*/
- 
-//db_clear_insn_Data();
-//db_clear_function_Data();
 
-
-//#endif
 
       /* In theory we could handle more than one reaching def, it
    just makes the code to update the insn stream more complex.  */
@@ -1015,7 +1002,8 @@ if (dump_file)
   }
     }//end of copy
 
-  if(remove_zext)
+
+  if((!copy_needed) && remove_zext)
     return true;
   
   /* If cand->insn has been already modified, update cand->mode to a wider
