@@ -501,7 +501,8 @@ eval_expr_extremum_upper_bound(insns_to_value* node)
 static machine_x_length eval_node_extremum_upper_bound(insns_to_value* node)
 {
   machine_x_length  nodeExtremumUpperBound;
-  int category;
+  int category,value_max_bits_length;
+  int machine_word_length = (UNITS_PER_WORD * 8);
 
   category = eval_category(node);
 
@@ -509,7 +510,13 @@ static machine_x_length eval_node_extremum_upper_bound(insns_to_value* node)
   {
     case CONST_EVALUATION:
       nodeExtremumUpperBound = INTVAL(node->current_expr);
-      break;
+      value_max_bits_length = eval_Get_Value_Width_In_Bits(
+                                                        nodeExtremumUpperBound);
+      if((value_max_bits_length > (machine_word_length - 1)))
+        value_max_bits_length = (machine_word_length - 1);
+      nodeExtremumUpperBound = EVAL_BITS_TO_MAX_BITS_WORD_VALUE(
+                                                         value_max_bits_length);
+       break;
     case REG_EVALUATION:
       nodeExtremumUpperBound = eval_REG_extremum_upper_bound(node);
       break;
