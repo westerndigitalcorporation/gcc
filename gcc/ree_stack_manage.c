@@ -22,6 +22,7 @@ along with GCC; see the file COPYING3.  If not see
 
 /* This file manage two global generic stacks , origin stack and temp stack */
 
+
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
@@ -44,12 +45,15 @@ along with GCC; see the file COPYING3.  If not see
 #include <algorithm>
 #include <pthread.h>
 #include "ree_stack_manage.h"
+ 
 
-#ifndef GCC_REE_STACK_MANAGE
-#define GCC_REE_STACK_MANAGE
 
-namespace stm
-{
+  /* Origin stack  */
+  static std::stack<insns_to_value*> stack_manage_origin;
+  
+  /* Temp stack  */
+  static std::stack<insns_to_value*> stack_manage_temp;
+
 
   /* This function returns chosen stack by reference 
      input:
@@ -57,20 +61,21 @@ namespace stm
          stack_choise should be one of :
            1.1) (enum val=0) STACK_MANAGE_ORIGIN : origin stack 
            1.2) (enum val=1) STACK_MANAGE_TEMP : temp stack  */
-  template <typename ItemType>
-  std::stack<ItemType*>& stack_manage_get(int stack_choice)
+  static std::stack<insns_to_value*>& 
+  stack_manage_get(stack_manage_enum stack_choice)
   {
     if(stack_choice == STACK_MANAGE_TEMP)
     {
-     static std::stack<ItemType*> stack_manage_temp;
-     return stack_manage_temp;
+      static std::stack<insns_to_value*> stack_manage_temp;
+      return stack_manage_temp;
     }
-
-    /* stack_choice == STACK_MANAGE_ORIGIN  */
-    static std::stack<ItemType*> stack_manage_origin;
-    return stack_manage_origin;
+    else
+    {
+      /* stack_choice == STACK_MANAGE_ORIGIN  */
+      static std::stack<insns_to_value*> stack_manage_origin;
+      return stack_manage_origin;
+    }
   }
-
 
   
   /* This function push the node to the chosen stack
@@ -80,11 +85,10 @@ namespace stm
          stack_choise should be one of :
          2.1) (enum val=0) STACK_MANAGE_ORIGIN : origin stack 
          2.2) (enum val=1) STACK_MANAGE_TEMP : temp stack  */
-  template <typename ItemType> 
   void 
-  stack_manage_push(int stack_choice, ItemType * node)
+  stack_manage_push(stack_manage_enum stack_choice, insns_to_value * node)
   {
-    std::stack<ItemType*>& st = stack_manage_get<ItemType>(stack_choice);
+    std::stack<insns_to_value*>& st = stack_manage_get(stack_choice);
     st.push(node);
   }
 
@@ -95,11 +99,10 @@ namespace stm
        stack_choise should be one of :
          1.1) (enum val=0) STACK_MANAGE_ORIGIN : origin stack 
          1.2) (enum val=1) STACK_MANAGE_TEMP : temp stack  */
-  template <typename ItemType> 
   bool 
-  stack_manage_is_empty(int stack_choice)
+  stack_manage_is_empty(stack_manage_enum stack_choice)
   {
-    std::stack<ItemType*>& st = stack_manage_get<ItemType>(stack_choice);
+    std::stack<insns_to_value*>& st = stack_manage_get(stack_choice);
     return st.empty();
   }
 
@@ -110,14 +113,12 @@ namespace stm
        stack_choise should be one of :
          1.1) (enum val=0) STACK_MANAGE_ORIGIN : origin stack 
          1.2) (enum val=1) STACK_MANAGE_TEMP : temp stack  */
-  template <typename ItemType> 
-  ItemType* 
-  stack_manage_top(int stack_choice)
+  insns_to_value* 
+  stack_manage_top(stack_manage_enum stack_choice)
   {
-    std::stack<ItemType*>& st = stack_manage_get<ItemType>(stack_choice);
+    std::stack<insns_to_value*>& st = stack_manage_get(stack_choice);
     return st.top();
   }
-
 
   
   /* This function pop the node from the chosen stack  
@@ -126,36 +127,38 @@ namespace stm
        stack_choise should be one of :
          1.1) (enum val=0) STACK_MANAGE_ORIGIN : origin stack 
          1.2) (enum val=1) STACK_MANAGE_TEMP : temp stack  */ 
-  template <typename ItemType> 
   void 
-  stack_manage_pop(int stack_choice)
+  stack_manage_pop(stack_manage_enum stack_choice)
   {
-    std::stack<ItemType*>& st = stack_manage_get<ItemType>(stack_choice);
+    std::stack<insns_to_value*>& st = stack_manage_get(stack_choice);
     st.pop();
 
   }
 
 
-  /* 
   /* pop and return the stack top (stack head)
      input:
      1)stack_choise : the stack that we want to work with it
         stack_choise should be one of :
           1.1) (enum val=0) STACK_MANAGE_ORIGIN : origin stack 
           1.2) (enum val=1) STACK_MANAGE_TEMP : temp stack  */
-  template <typename ItemType> 
-  ItemType* 
-  stack_manage_pop_and_return(int stack_choice)
+  insns_to_value* 
+  stack_manage_pop_and_return_top(stack_manage_enum stack_choice)
   {
-    std::stack<ItemType*>& st = stack_manage_get<ItemType>(stack_choice);
-    ItemType* node = st.top();
+    std::stack<insns_to_value*>& st = stack_manage_get(stack_choice);
+    insns_to_value* node = st.top();
     st.pop();
     return node;
   }
 
 
+  /* Return the stack size  */
+  int 
+  stack_manage_size(stack_manage_enum stack_choice)
+  {
+    std::stack<insns_to_value*>& st = stack_manage_get(stack_choice);
+    return st.size();
 
-}/* name space stm */
+  }
 
-#endif /* GCC_REE_STACK_MANAGE */
   

@@ -85,8 +85,7 @@ destructor:
 #include "tree-pass.h"
 #include "ree_BuildDB.h"
 //#include "ree_stack_manage.h"
-#include "ree_stack_manage.c"
-
+ 
 //#include "ree_eval.h"
 #include <math.h>
 
@@ -110,21 +109,6 @@ std::map<int,rtx_insn*> uid_to_insn_map;
 std::map<int,basic_block> bb_index_to_bb_map;
 
 
-/* **  IF_THEN_ELSE Database **  */
-
-
-/* Map : (Exit Basic block Index) --> (IF_THEN_ELSE node)
- IF_THEN_ELSE EXIT BasicBlock is the first basic block that will be executed 
- after the 'if/else' code  */
-//std::map<int, if_then_else_node*> if_else_bb_to_node_map;
-
-/* Map : (IF_THEN_ELSE Basic Block index) --> (IF_THEN_ELSE Node)  */
-//std::map<int, if_then_else_node* > bb_to_if_else_node_map;
-
-/* list hold IF_THE_ELSE insns on current function  */
-//std::list <rtx_insn* > if_then_else_insns_list;
- 
-
 /* ** Value dependency Database **  */
 
 
@@ -134,21 +118,6 @@ auto_vec<rtx_insn *> insn_defs;
 
 /* Reference functions */
 
-/* Return IF_THEN_ELSE insn List (if_then_else_insns_list) by reference  */
-/*std::list <rtx_insn* >&
-db_get_ifelse_insns_list()
-{
-  static std::list <rtx_insn* > if_then_else_insns_list;
-  return if_then_else_insns_list;
-}*/
-
-/* Return if_else_bb_to_node map by reference  */
-/*std::map<int,if_then_else_node*>& 
-db_get_ifelse_bb_to_node_map()
-{
-  static std::map<int,if_then_else_node*> if_else_bb_to_node_map;
-  return if_else_bb_to_node_map;
-}*/
 
 /* Return bb_index_to_bb_map map by reference  */
 std::map<int,basic_block>& 
@@ -171,8 +140,6 @@ db_get_uid_to_insn_map()
 /* ** structs constructors **  */
 
 
- 
-
 /* if_then_else_node constructor */
 static if_then_else_node *
 db_create_ifelse_node(rtx_insn * ins)
@@ -191,8 +158,8 @@ db_create_ifelse_node(rtx_insn * ins)
 
 /* Input  : Node 
    Output : Return unique ID for operand  */
-template <typename ItemType>  static int
-stack_manage_InsnToVal_calcOpernadId (ItemType  *node){
+static int
+stack_manage_InsnToVal_calcOpernadId (insns_to_value  *node){
   int exprId,insnId,exprShift=10,tempInId;
   insns_to_value * fatherNode = node->father;
   
@@ -221,7 +188,7 @@ db_calc_node_id(insns_to_value * node)
     idin= INSN_UID(node->current_insn);
     return idin;
   }
-  return  stack_manage_InsnToVal_calcOpernadId<insns_to_value>(node);
+  return  stack_manage_InsnToVal_calcOpernadId(node);
 }
 
 
@@ -402,7 +369,6 @@ db_get_jump_dest_bb(rtx_insn* jmpinsn){
   }
 
   
-   
    /* If there is insns on the basic block 
       return the index of the jump destenation Basic block
       else return -1 */
@@ -452,17 +418,11 @@ static void
 db_build_bb_to_ifelse_map(ifelse_data *ifelse_data_node)
 {
   int bbIndex;
- // bb_to_if_else_node.clear();
-  /*std::list <rtx_insn* >& if_then_else_insns_list = db_get_ifelse_insns_list();*/
 
   /* IF_THEN_ELSE insns list itertator */
   std::list <rtx_insn* >::iterator IfElseListIter;
   std::map<int, if_then_else_node*>::iterator mapIter;
-/*   
-   std::map<int, if_then_else_node* >& 
-  ifelse_data_node->bb_to_if_else_node_map = db_get_bb_to_if_else_node_map();
-   */
-   
+
   /* For each if_then_else insn */
   for(IfElseListIter=ifelse_data_node->if_then_else_insns_list.begin(); 
       IfElseListIter != ifelse_data_node->if_then_else_insns_list.end(); ++IfElseListIter)
@@ -701,9 +661,8 @@ db_if_else_bb_to_node(ifelse_data *ifelse_data_node)
         std::pair<int, if_then_else_node*>
                                 (currentNode->else_dest_bb_index,currentNode)); 
 
-    }
-  }
-
+    }/* if is_valid */
+  }/* for  */
 
 }
 
@@ -712,7 +671,6 @@ db_if_else_bb_to_node(ifelse_data *ifelse_data_node)
 void 
 db_build_ifelse_data(ifelse_data* ifelse_data_node)
 {
-
 
   /* Build a list that contains all IF_THEN_ELSE insns in 
      the current function  */
@@ -838,8 +796,8 @@ db_push_operands(insns_to_value* node)
                                                operand, i+1,node, D_BTM_EXPR);
 
       /* Push the node to the stack and to the temporary stack*/
-      stm::stack_manage_push<insns_to_value>(STACK_MANAGE_ORIGIN, operandNode);
-      stm::stack_manage_push<insns_to_value>(STACK_MANAGE_TEMP, operandNode);
+      stack_manage_push(STACK_MANAGE_ORIGIN, operandNode);
+      stack_manage_push(STACK_MANAGE_TEMP, operandNode);
 
     } /* if is src operand  */
   } /* for  */
@@ -1440,10 +1398,10 @@ db_Push_candidate_insns_dependency_to_stack(insns_to_value* node,
                                    single_set(dep_insn), 0, node, D_BTM_INSN);
     
       /* Push node to stacks  */
-      stm::stack_manage_push<insns_to_value>(STACK_MANAGE_ORIGIN,
+      stack_manage_push(STACK_MANAGE_ORIGIN,
                                              dep_insn_Node);
 
-      stm::stack_manage_push<insns_to_value>(STACK_MANAGE_TEMP, dep_insn_Node);
+      stack_manage_push(STACK_MANAGE_TEMP, dep_insn_Node);
     } /* for  */
   } /* IF  */
 }
@@ -1480,18 +1438,18 @@ db_build_value_dependency_graph(rtx_insn* insn)
   insnNode = db_create_node(insn, NULL, 0, NULL, D_BTM_INSN);
 
   /* Push the node to the stack and the temporary stack  */
-  stm::stack_manage_push<insns_to_value>(STACK_MANAGE_ORIGIN, insnNode);
-  stm::stack_manage_push<insns_to_value>(STACK_MANAGE_TEMP, insnNode);
+  stack_manage_push(STACK_MANAGE_ORIGIN, insnNode);
+  stack_manage_push(STACK_MANAGE_TEMP, insnNode);
   
   /* While TEMP stack not empty */
-  while(!stm::stack_manage_is_empty<insns_to_value>(STACK_MANAGE_TEMP))
+  while(!stack_manage_is_empty(STACK_MANAGE_TEMP))
   {
     /* Get stack Top */
-    currentNode = stm::stack_manage_top<insns_to_value>(STACK_MANAGE_TEMP);
+    currentNode = stack_manage_top(STACK_MANAGE_TEMP);
     /* If the stack top is visited pop it from the stack */
     if(currentNode->is_visited)
     {
-       stm::stack_manage_pop<insns_to_value>(STACK_MANAGE_TEMP);
+       stack_manage_pop(STACK_MANAGE_TEMP);
     }
     else /* If the stack top in not visited*/
     {

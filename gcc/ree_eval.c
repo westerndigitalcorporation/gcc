@@ -49,13 +49,12 @@ Description:
 #include <algorithm>
 #include <pthread.h>
 //#include "ree_stack_manage.h"
-#include "ree_stack_manage.c"
+//#include "ree_stack_manage.h"
 
 #include "ree_BuildDB.h"
 
 #include "ree_eval.h"
 #include "machmode.h"
-using namespace stm;
 #define EVAL_MAGIC  0x03f08c5392f756cd
 int eval_table[64] = {
      0,  1, 12,  2, 13, 22, 17,  3,
@@ -581,9 +580,9 @@ static insns_to_value* eval_insn_value()
   insns_to_value  *currentNode, *tempn;
   machine_x_length machinWordMaxVal = MACHINE_WORD_MAX_VALUE;
 
-  while(!stm::stack_manage_is_empty<insns_to_value>(STACK_MANAGE_ORIGIN))
+  while(! stack_manage_is_empty(STACK_MANAGE_ORIGIN))
   {
-    currentNode = stm::stack_manage_top<insns_to_value>(STACK_MANAGE_ORIGIN);
+    currentNode = stack_manage_top(STACK_MANAGE_ORIGIN);
     machine_x_length expr_upper_bound;
     
     /* The default upper bound (before an evaluation) is the machine's 
@@ -635,10 +634,9 @@ static insns_to_value* eval_insn_value()
 
     /* If current expression is not the first pushed element (root insn)
        pop and free the node else only pop the node  */
-    tempn = stm::stack_manage_pop_and_return<insns_to_value>(
-                                                        STACK_MANAGE_ORIGIN);
+    tempn = stack_manage_pop_and_return_top(STACK_MANAGE_ORIGIN);
     /* If current expression is not the first pushed element  */
-    if(stm::stack_manage_get<insns_to_value>(STACK_MANAGE_ORIGIN).size() > 1)
+    if(stack_manage_size(STACK_MANAGE_ORIGIN) > 1)
     {
       /* Free the node  */
      db_free_node(tempn);

@@ -66,11 +66,11 @@ constructors:
 #include <list>
 #include <map>
 #include <algorithm>
+#include "ree_stack_manage.h"
+
+
+
  
-
-
-typedef long long int machine_x_length;
-
 #define BUILDDB_ALLOW_SUPPORT_ON_ONE_IF_ONLY
 
 #define RTX_INSN_NULL (rtx_insn*)0
@@ -107,55 +107,7 @@ typedef enum node_type{
 }db_node_type;
 
 /* * struct *  */
-struct insns_to_value
-{
-  /* We have two types:
-      1) D_BTM_INSN : if the node represent insn (rtx_insn)
-      2) D_BTM_EXPR : if the node represent operand(sub insn) (rtx)  */
-  int type;
 
-  /* Point to last insn/expression(REG) that depend on current expression  */
-  insns_to_value * father;
-
-  /* Point to previous node on the stack  */
-  insns_to_value * previous;
-
-  /* Current instruction if the node is operand current_insn 
-     will be the containing instruction 
-     (i.e the instruction that containing the operand)  */
-  rtx_insn *current_insn;
-
-  /* Current expression  */
-  rtx current_expr;
-
-  /* Holds upper bound values of the expressions that the 
-     current expression Depending on them (holds sons upper bound values)  */
-  std::list<machine_x_length> operands_upper_bound;
- 
-  /* Holds current expression code (i.e REG,PLUS,CONST)  */
-  rtx_code code;
-
-  /* Current expression Upper boud  */
-  machine_x_length upper_bound;
-
-  /* Operand number used to calculate the id start counting from 1, 
-     if current node is insn operanNum value will be 0.  */
-  int opernad_num;
-
-  /* Unique id to verify if we visted the expression before. */
-  int id;
-
-  bool valid_value;
-
-  bool is_supported;
-
-  bool is_visited;
-
-  /* when extreme_value_path = true we evaluate the expression upper bound  
-     as the maximum possible upper bound  */
-  bool extreme_value_path;
-
-};
 
 
 struct if_then_else_node
