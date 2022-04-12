@@ -155,7 +155,7 @@ eval_REG_extremum_upper_bound(insns_to_value *node)
   {
     /* We can't find out the register value so the register upper bound 
        will be the maximum value that the register could have  */
-    return currentRegExremum;
+    return MACHINE_WORD_MAX_VALUE;
   }
   
   /* Get maximum dependency expression upper bound  */
@@ -317,7 +317,7 @@ static machine_x_length eval_expr_upper_bound(insns_to_value *node)
   else
     mode_length_mask = GET_MASK(mode_length-1);
 
-  if((~mode_length_mask) & value != 0 )
+  if(((~mode_length_mask) & value) != 0 )
     value = -1;
   else
     value = value & mode_length_mask;
