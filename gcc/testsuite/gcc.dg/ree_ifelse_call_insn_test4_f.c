@@ -4,26 +4,29 @@
 
 
 extern void foo(unsigned int val1, unsigned int val2, unsigned char index);
-extern   int go(unsigned char x);
+extern   char go(unsigned char x);
+extern   int bar(int x);
+
 
 int main(int argc, char** argv)
 {
 int z=(int)argv[0];
 int y,w,x;
 
-x=65;
+x=bar(z);
 if(z>1)
 {
   y=go((unsigned char)x+1);
-  x=70;
+    x=50;
+  
 }
 else
 {
-     y=go((unsigned char)x);
+  y=go((unsigned char)x);
  }
-w = (unsigned char)x;//<<<<<---DELETED
+w = (unsigned char)x;
 foo(1, 2, w);
 x=go((unsigned char)x+w);
 }
-/* { dg-final { scan-rtl-dump "ree_eval found unnecessary zext" "ree" } } */
+/* { dg-final { scan-rtl-dump-not "ree_eval found unnecessary zext" "ree" } }  */
 

@@ -24,4 +24,4 @@ w = (unsigned char)x;
 foo(1, 2, w);
 x=go((unsigned char)x+w);
 }
-/* { dg-final { scan-rtl-dump-not "ree_eval_zext_delete" "ree" } }  */
+/* { dg-final { scan-rtl-dump-not "ree_eval found unnecessary zext" "ree" } }  */

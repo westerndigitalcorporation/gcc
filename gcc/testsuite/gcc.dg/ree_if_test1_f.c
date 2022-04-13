@@ -11,19 +11,17 @@ int main(int argc, char** argv)
 int z=(int)argv[0];
 int y,w,x;
 
-x=65;
+x=255;
 if(z>1)
 {
   y=go((unsigned char)x+1);
-  x=70;
+  x=126;
 }
-else
-{
-     y=go((unsigned char)x);
- }
+
+
 w = (unsigned char)x;//<<<<<---DELETED
 foo(1, 2, w);
 x=go((unsigned char)x+w);
 }
-/* { dg-final { scan-rtl-dump "ree_eval found unnecessary zext" "ree" } } */
+/* { dg-final { scan-rtl-dump-not "ree_eval found unnecessary zext" "ree" } } */
 

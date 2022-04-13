@@ -9,18 +9,18 @@ extern   int go(unsigned char x);
 int main(int argc, char** argv)
 {
 int z=(int)argv[0];
-int y,w,x;
-
-x=65;
+int y,w,x,e;
+e=1;
+x=220;
 if(z>1)
 {
   y=go((unsigned char)x+1);
-  x=70;
+  x=170;
+  e=e+42;
 }
-else
-{
-     y=go((unsigned char)x);
- }
+
+x=e;
+
 w = (unsigned char)x;//<<<<<---DELETED
 foo(1, 2, w);
 x=go((unsigned char)x+w);

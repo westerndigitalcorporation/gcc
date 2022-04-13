@@ -15,12 +15,10 @@ x=65;
 if(z>1)
 {
   y=go((unsigned char)x+1);
-  x=70;
+  x=126;
 }
-else
-{
-     y=go((unsigned char)x);
- }
+
+
 w = (unsigned char)x;//<<<<<---DELETED
 foo(1, 2, w);
 x=go((unsigned char)x+w);
