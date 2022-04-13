@@ -1,0 +1,27 @@
+/* { dg-do compile } */
+/* { dg-options "-c -Os -fdump-rtl-ree -free" } */
+
+
+extern void foo(unsigned int val1, unsigned int val2, unsigned char index);
+extern   int go(unsigned char x);
+
+int main(int argc, char** argv)
+{
+int z=(int)argv[0];
+int y,w,x;
+
+x=65;
+if(z>1)
+{
+  y=go((unsigned char)x+1);
+  x=155;
+}
+else
+{
+     y=go((unsigned char)x);
+ }
+w = (unsigned char)x;
+foo(1, 2, w);
+x=go((unsigned char)x+w);
+}
+/* { dg-final { scan-rtl-dump-not "ree_eval_zext_delete" "ree" } }  */

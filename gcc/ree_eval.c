@@ -680,7 +680,11 @@ bool eval_zext_is_reachable_and_removable(rtx_insn* insn)
       /* If the zero extend doesn't cut the value
          (the src upper bound less than the dest mode upper bound) */
       if((modeMaxValue >= node->upper_bound ) && (node->upper_bound >= 0))
+      {
+       if (dump_file)
+            fprintf (dump_file, "ree_eval found unnecessary zext\n ");
         return true;
+      }
     
     }
 
