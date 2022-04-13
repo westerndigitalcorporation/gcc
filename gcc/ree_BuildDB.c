@@ -1237,7 +1237,7 @@ db_findAndPush_Last_Dependency_insn_before_IfThenElse(insns_to_value* node,
   /* Make sorted list with IF_THEN_ELSE predecessors basic blocks  */
   ifElseBB=BLOCK_FOR_INSN(ifelesNode->insn);
   db_build_basic_block_predecessors_List(ifElseBB,IfElsePredsBBs);
-  IfElsePredsBBs.pop_front();
+
 
   /* Get closest predecessor basic block with use def  */
   lastBBindex = db_getClosestBBwithUseDef(IfElsePredsBBs, dependency_db);
